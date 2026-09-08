@@ -16,6 +16,12 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _is_within(path: Path, directories: list[Path]) -> bool:
+    if not path.is_file():
+        return False
+    return any(path.is_relative_to(directory) for directory in directories)
+
+
 class JsonFile:
     """A JSON document that is written atomically."""
 
@@ -106,6 +112,15 @@ class StateStore:
 
     def save_queue(self) -> None:
         self._queue.save()
+
+    def prune_queue(self, scan_dirs: list[Path]) -> int:
+        """Drop queued images that are gone or no longer under the scan directories."""
+        queue = self.tier0_queue
+        kept = [item for item in queue if _is_within(Path(item), scan_dirs)]
+        removed = len(queue) - len(kept)
+        if removed:
+            self._queue.replace(kept)
+        return removed
 
     # -- Tier 0 progress --------------------------------------------------
     @property

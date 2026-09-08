@@ -80,6 +80,10 @@ def build_queue(settings: Settings, state, include_tagged: bool = False) -> int:
     log = get_logger()
     scan_dirs = settings.require_scan_dirs()
 
+    stale = state.prune_queue(scan_dirs)
+    if stale:
+        log.info("Dropped %d queued images outside the scan directories", stale)
+
     log.info("Scanning sidecars to build the Tier 0 queue...")
     taglists = sidecar.scan_taglists(settings.exiftool, scan_dirs)
 

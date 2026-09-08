@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "camie-immich-tagger"
+version = "1.0.0"
+description = "Local anime/illustration auto-tagging pipeline for Immich (Linux)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+# onnxruntime is intentionally NOT listed: install.sh picks the hardware-specific
+# variant (onnxruntime-openvino / onnxruntime-gpu / onnxruntime).
+
+[project.scripts]
+camie-tagger = "camie_tagger.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["camie_tagger*"]

@@ -1,0 +1,9 @@
+# Core dependencies. The ONNX Runtime variant is chosen by install.sh based on
+# detected hardware, so it is deliberately absent here:
+#   Intel  -> onnxruntime-openvino
+#   NVIDIA -> onnxruntime-gpu
+#   other  -> onnxruntime
+numpy>=1.24
+Pillow>=10.0
+requests>=2.31
+python-dotenv>=1.0

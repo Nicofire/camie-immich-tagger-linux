@@ -1,0 +1,22 @@
+# camie-immich-tagger cron examples.
+#
+# Install for the current user with:  crontab -e
+# Adjust the path if you cloned somewhere other than /opt/camie-immich-tagger.
+#
+# The tool writes its own rotating log (CAMIE_LOG_DIR), so redirecting output is
+# only needed if you also want cron's view of the run.
+
+CAMIE=/opt/camie-immich-tagger/camie-immich-tagger-linux/venv/bin/camie-tagger
+
+# Every night at 03:00: tag new images, then let Immich import the sidecars.
+0 3 * * * $CAMIE run --mode recent --immich-scan
+
+# Every night at 04:00: SauceNAO backfill for images without a character tag.
+# Keep this separate from the tagging run because it is rate limited and slow.
+0 4 * * * $CAMIE tier0
+
+# Weekly on Sunday at 05:00: remove sidecars whose image no longer exists.
+0 5 * * 0 $CAMIE cleanup-orphans --confirm
+
+# Alternative: do everything in one nightly run.
+# 0 3 * * * $CAMIE run --mode recent --tier0 --immich-scan

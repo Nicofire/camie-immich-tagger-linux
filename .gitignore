@@ -1,0 +1,17 @@
+# Secrets and local configuration
+.env
+*.key
+
+# Model weights
+models/
+
+# Runtime state and logs
+data/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/

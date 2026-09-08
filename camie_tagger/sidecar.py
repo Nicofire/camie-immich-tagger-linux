@@ -143,6 +143,40 @@ def write_taglist(exiftool: str, image_path: Path, taglist: list[str]) -> str:
     return f"+{len(new_tags)}"
 
 
+def update_taglist(
+    exiftool: str, image_path: Path, add: list[str], remove: list[str]
+) -> str:
+    """Add and remove tags in one exiftool call. Returns '+N-M', 'NO_CHANGE' or 'ERR:...'.
+
+    Unlike write_taglist this can delete values, so callers must restrict `remove` to
+    tags they are authoritative for.
+    """
+    sidecar_file = sidecar_path(image_path)
+    existing = set(read_taglist(exiftool, image_path))
+    new_tags = [tag for tag in add if tag and tag not in existing]
+    drop_tags = [tag for tag in remove if tag and tag in existing]
+
+    if not new_tags and not drop_tags:
+        return "NO_CHANGE"
+    if not sidecar_file.exists():
+        return write_taglist(exiftool, image_path, new_tags)
+
+    arg_lines = ["-overwrite_original"]
+    arg_lines += [f"-{TAGS_FIELD}-={tag}" for tag in drop_tags]
+    arg_lines += [f"-{TAGS_FIELD}+={tag}" for tag in new_tags]
+    arg_lines.append(str(sidecar_file))
+
+    try:
+        stdout, stderr = run_exiftool(exiftool, arg_lines)
+    except ExiftoolError as exc:
+        return f"ERR:{exc}"
+
+    if "1 image files updated" not in stdout:
+        detail = (stderr or stdout).strip().replace("\n", " ")
+        return f"ERR:{detail[:200]}"
+    return f"+{len(new_tags)}-{len(drop_tags)}"
+
+
 def scan_directory_taglists(exiftool: str, directory: Path) -> dict[Path, list[str]]:
     """Read every sidecar under a directory in a single exiftool call."""
     log = get_logger()

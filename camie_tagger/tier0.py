@@ -35,6 +35,13 @@ DANBOORU_TAG_FIELDS = {
     "tag_string_artist": "artist",
 }
 
+# Namespaces Danbooru is authoritative for. Verification never touches general/ or
+# rating/, which the local model owns and Danbooru results do not describe.
+VERIFIABLE_NAMESPACES = ("character", "copyright", "artist")
+
+# Deleting a tag needs more confidence than adding one.
+DEFAULT_REPLACE_MIN_SIMILARITY = 95.0
+
 
 @dataclass
 class Tier0Result:
@@ -42,20 +49,38 @@ class Tier0Result:
     hits: int = 0
     misses: int = 0
     failed: int = 0
+    corrected: int = 0
 
     def summary(self) -> str:
         return (
             f"processed={self.processed} hits={self.hits} "
-            f"misses={self.misses} failed={self.failed}"
+            f"misses={self.misses} corrected={self.corrected} failed={self.failed}"
         )
 
 
-def build_queue(settings: Settings, state) -> int:
-    """Queue images that have a real copyright tag but no character tag."""
+def plan_changes(existing: list[str], danbooru: list[str]) -> tuple[list[str], list[str]]:
+    """Return (tags to add, tags to remove) for a verified image."""
+    danbooru_set = set(danbooru)
+    existing_set = set(existing)
+    add = [tag for tag in danbooru if tag not in existing_set]
+    remove = [
+        tag
+        for tag in existing
+        if tag.split("/", 1)[0] in VERIFIABLE_NAMESPACES and tag not in danbooru_set
+    ]
+    return add, remove
+
+
+def build_queue(settings: Settings, state, include_tagged: bool = False) -> int:
+    """Queue images that have a real copyright tag but no character tag.
+
+    With include_tagged the character rule is dropped, so images that already have
+    character tags are queued too and can be checked against Danbooru.
+    """
     log = get_logger()
     scan_dirs = settings.require_scan_dirs()
 
-    log.info("Scanning sidecars to find images without a character tag...")
+    log.info("Scanning sidecars to build the Tier 0 queue...")
     taglists = sidecar.scan_taglists(settings.exiftool, scan_dirs)
 
     processed = set(state.tier0_progress)
@@ -64,11 +89,13 @@ def build_queue(settings: Settings, state) -> int:
     for image, tags in taglists.items():
         if str(image) in processed:
             continue
-        if tags_in_namespace(tags, "character"):
+        characters = tags_in_namespace(tags, "character")
+        if characters and not include_tagged:
             continue
         copyrights = tags_in_namespace(tags, "copyright")
         # 'copyright/original' means no source work, so reverse search cannot help.
-        if any(tag != "copyright/original" for tag in copyrights):
+        real_copyright = any(tag != "copyright/original" for tag in copyrights)
+        if real_copyright or (include_tagged and characters):
             candidates.append(image)
 
     added = state.enqueue_tier0(candidates)
@@ -137,11 +164,73 @@ def _fetch_danbooru_tags(session: requests.Session, post_id: int) -> list[str]:
     return taglist
 
 
+def _apply_verification(
+    settings: Settings,
+    state,
+    result: Tier0Result,
+    image: Path,
+    taglist: list[str],
+    similarity: float,
+    confirm: bool,
+    replace_min_similarity: float,
+    record_progress: bool,
+) -> None:
+    """Compare the sidecar against Danbooru, then add missing and drop wrong tags."""
+    log = get_logger()
+    existing = sidecar.read_taglist(settings.exiftool, image)
+    to_add, to_remove = plan_changes(existing, taglist)
+
+    if to_remove and similarity < replace_min_similarity:
+        log.info(
+            "%s: %.0f%% is below the %.0f%% replace threshold, keeping %d existing tag(s)",
+            image.name,
+            similarity,
+            replace_min_similarity,
+            len(to_remove),
+        )
+        to_remove = []
+
+    if not to_add and not to_remove:
+        log.info("ok %.0f%% %s (tags already match)", similarity, image.name)
+        if record_progress:
+            state.record_tier0(image, f"verified:{similarity:.0f}%")
+        return
+
+    if to_remove:
+        result.corrected += 1
+        log.info("%s: replacing %s", image.name, ", ".join(to_remove))
+    if to_add:
+        log.info("%s: adding %s", image.name, ", ".join(to_add))
+
+    if not confirm:
+        log.info(
+            "[dry run] %s would gain %d and lose %d tag(s)",
+            image.name,
+            len(to_add),
+            len(to_remove),
+        )
+        return
+
+    outcome = sidecar.update_taglist(settings.exiftool, image, to_add, to_remove)
+    if outcome.startswith("ERR:"):
+        result.failed += 1
+        log.error("%s: %s", image, outcome[4:])
+        return
+    log.info("hit %.0f%% %s [%s]", similarity, image.name, outcome)
+    if record_progress:
+        state.record_tier0(
+            image, f"corrected:{similarity:.0f}%:+{len(to_add)}-{len(to_remove)}"
+        )
+
+
 def run_tier0(
     settings: Settings,
     state,
     limit: int | None = None,
     min_similarity: float | None = None,
+    verify: bool = False,
+    confirm: bool = False,
+    replace_min_similarity: float = DEFAULT_REPLACE_MIN_SIMILARITY,
 ) -> Tier0Result:
     log = get_logger()
     settings.require_saucenao()
@@ -170,6 +259,21 @@ def run_tier0(
         settings.tier0_interval,
         min_similarity,
     )
+    if verify:
+        log.info(
+            "Verify mode: existing %s tags are compared against Danbooru; "
+            "replacements need at least %.0f%% similarity.",
+            "/".join(VERIFIABLE_NAMESPACES),
+            replace_min_similarity,
+        )
+        if not confirm:
+            log.warning(
+                "Dry run: nothing is written and progress is NOT recorded, so these "
+                "searches will run again. Add --confirm to apply the changes."
+            )
+
+    # In a verify dry run the results are not persisted, so the queue stays intact.
+    record_progress = confirm or not verify
 
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
@@ -193,7 +297,8 @@ def run_tier0(
 
             if match is None:
                 result.misses += 1
-                state.record_tier0(image, "miss")
+                if record_progress:
+                    state.record_tier0(image, "miss")
                 log.info("miss %s", image.name)
             else:
                 similarity, post_id = match
@@ -201,24 +306,39 @@ def run_tier0(
                     taglist = _fetch_danbooru_tags(session, post_id)
                 except requests.RequestException as exc:
                     result.failed += 1
-                    state.record_tier0(image, f"danbooru_error:{str(exc)[:60]}")
+                    if record_progress:
+                        state.record_tier0(image, f"danbooru_error:{str(exc)[:60]}")
                     log.error("Danbooru lookup failed for post %s: %s", post_id, exc)
                     taglist = []
 
                 if taglist:
-                    outcome = sidecar.write_taglist(settings.exiftool, image, taglist)
-                    characters = tags_in_namespace(taglist, "character")
                     result.hits += 1
-                    state.record_tier0(
-                        image, f"hit:{similarity:.0f}%:{','.join(characters)}"
-                    )
-                    log.info(
-                        "hit %.0f%% %s -> %s [%s]",
-                        similarity,
-                        image.name,
-                        ", ".join(characters) or "no character tag",
-                        outcome,
-                    )
+                    if verify:
+                        _apply_verification(
+                            settings,
+                            state,
+                            result,
+                            image,
+                            taglist,
+                            similarity,
+                            confirm,
+                            replace_min_similarity,
+                            record_progress,
+                        )
+                    else:
+                        outcome = sidecar.write_taglist(settings.exiftool, image, taglist)
+                        characters = tags_in_namespace(taglist, "character")
+                        if record_progress:
+                            state.record_tier0(
+                                image, f"hit:{similarity:.0f}%:{','.join(characters)}"
+                            )
+                        log.info(
+                            "hit %.0f%% %s -> %s [%s]",
+                            similarity,
+                            image.name,
+                            ", ".join(characters) or "no character tag",
+                            outcome,
+                        )
 
             state.save_progress()
 

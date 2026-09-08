@@ -15,7 +15,7 @@ from .model import ModelError
 from .pipeline import run_tagging
 from .sidecar import ExiftoolError
 from .state import StateStore
-from .tier0 import build_queue, run_tier0
+from .tier0 import DEFAULT_REPLACE_MIN_SIMILARITY, build_queue, run_tier0
 
 DESCRIPTION = """\
 Local anime/illustration auto-tagging for Immich.
@@ -107,6 +107,24 @@ def build_parser() -> argparse.ArgumentParser:
     tier0.add_argument(
         "--no-enqueue", action="store_true", help="use the existing queue as-is"
     )
+    tier0.add_argument(
+        "--verify",
+        action="store_true",
+        help="also check images that already have character tags, and correct wrong ones",
+    )
+    tier0.add_argument(
+        "--confirm",
+        action="store_true",
+        help="apply the changes found by --verify (without it, nothing is written)",
+    )
+    tier0.add_argument(
+        "--replace-min-similarity",
+        type=float,
+        default=DEFAULT_REPLACE_MIN_SIMILARITY,
+        metavar="PCT",
+        help="similarity required before an existing tag is replaced "
+        f"(default: {DEFAULT_REPLACE_MIN_SIMILARITY:.0f})",
+    )
 
     subparsers.add_parser(
         "immich-scan", parents=[common], help="trigger an Immich library and sidecar scan"
@@ -181,10 +199,18 @@ def _cmd_run(settings: Settings, args: argparse.Namespace) -> int:
 def _cmd_tier0(settings: Settings, args: argparse.Namespace) -> int:
     state = StateStore(settings.data_dir)
     if not args.no_enqueue:
-        build_queue(settings, state)
+        build_queue(settings, state, include_tagged=args.verify)
     if args.enqueue_only:
         return 0
-    run_tier0(settings, state, limit=args.limit, min_similarity=args.min_similarity)
+    run_tier0(
+        settings,
+        state,
+        limit=args.limit,
+        min_similarity=args.min_similarity,
+        verify=args.verify,
+        confirm=args.confirm,
+        replace_min_similarity=args.replace_min_similarity,
+    )
     return 0
 
 

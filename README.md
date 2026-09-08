@@ -271,6 +271,34 @@ camie-tagger tier0 --min-similarity 92  # stricter matching
 The free SauceNAO tier allows roughly 100 searches per day, so this deliberately runs
 slowly, honours the remaining daily quota, and resumes where it left off.
 
+By default Tier 0 only *adds* tags, and only looks at images that have a real copyright
+tag but no character tag.
+
+### Verifying and correcting existing tags
+
+The local model sometimes assigns the wrong character or copyright. `--verify` also
+queues images that already have character tags, compares them against the matching
+Danbooru post, adds what is missing and replaces what is wrong.
+
+```bash
+camie-tagger tier0 --verify --limit 10             # preview, writes nothing
+camie-tagger tier0 --verify --confirm --limit 10   # apply the changes
+```
+
+Safety rules:
+
+- **Dry run by default.** Without `--confirm` nothing is written.
+- **Only `character/`, `copyright/` and `artist/` tags can be replaced.** Your
+  `general/` and `rating/` tags are never deleted, because a Danbooru post does not
+  describe them.
+- **Replacing needs more confidence than adding.** A tag is only deleted at a similarity
+  of 95% or higher (`--replace-min-similarity`). Below that, missing tags are still added
+  and the existing ones are kept.
+- Manual tags outside those three namespaces are untouched.
+
+In a `--verify` dry run, progress is deliberately not recorded, so the same images are
+searched again when you re-run with `--confirm`. Use `--limit` to keep that cheap.
+
 ### Immich, statistics and cleanup
 
 ```bash

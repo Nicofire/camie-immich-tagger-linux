@@ -103,18 +103,22 @@ def plan_changes(existing: list[str], danbooru: list[str]) -> tuple[list[str], l
     return add, remove
 
 
-def build_queue(settings: Settings, state, include_tagged: bool = False) -> int:
+def build_queue(
+    settings: Settings, state, include_tagged: bool = False, prune: bool = True
+) -> int:
     """Queue images that have a real copyright tag but no character tag.
 
     With include_tagged the character rule is dropped, so images that already have
-    character tags are queued too and can be checked against Danbooru.
+    character tags are queued too and can be checked against Danbooru. Pruning is
+    skipped when the scan directories were narrowed for a single run.
     """
     log = get_logger()
     scan_dirs = settings.require_scan_dirs()
 
-    stale = state.prune_queue(scan_dirs)
-    if stale:
-        log.info("Dropped %d queued images outside the scan directories", stale)
+    if prune:
+        stale = state.prune_queue(scan_dirs)
+        if stale:
+            log.info("Dropped %d queued images outside the scan directories", stale)
 
     log.info("Scanning sidecars to build the Tier 0 queue...")
     taglists = sidecar.scan_taglists(settings.exiftool, scan_dirs)
@@ -352,6 +356,7 @@ def run_tier0(
 ) -> Tier0Result:
     log = get_logger()
     settings.require_saucenao()
+    scan_dirs = settings.require_scan_dirs()
 
     min_similarity = (
         min_similarity if min_similarity is not None else settings.tier0_min_similarity
@@ -359,10 +364,13 @@ def run_tier0(
     cap = limit or settings.tier0_daily_cap
 
     progress = state.tier0_progress
+    # The queue may span several directories, so honour the configured scan dirs here too.
     pending = [
-        Path(path)
-        for path in state.tier0_queue
-        if path not in progress and Path(path).is_file()
+        path
+        for path in (Path(entry) for entry in state.tier0_queue)
+        if str(path) not in progress
+        and path.is_file()
+        and any(path.is_relative_to(directory) for directory in scan_dirs)
     ]
 
     result = Tier0Result()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from .config import ConfigError, Settings, load_settings
 from .devices import DEVICE_CHOICES, DeviceError
@@ -42,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     group = common.add_argument_group("global options")
     group.add_argument("--config", metavar="PATH", help="path to the .env file")
+    group.add_argument(
+        "--scan-dir",
+        action="append",
+        metavar="PATH",
+        help="limit this run to one directory; repeatable, overrides CAMIE_SCAN_DIRS",
+    )
     group.add_argument("--immich-url", metavar="URL")
     group.add_argument("--immich-api-key", metavar="KEY")
     group.add_argument("--saucenao-api-key", metavar="KEY")
@@ -154,8 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _settings_from_args(args: argparse.Namespace) -> Settings:
+    scan_dirs = [Path(p).expanduser() for p in args.scan_dir] if args.scan_dir else None
     settings = load_settings(
         args.config,
+        scan_dirs=scan_dirs,
         immich_url=args.immich_url,
         immich_api_key=args.immich_api_key,
         saucenao_api_key=args.saucenao_api_key,
@@ -204,7 +213,10 @@ def _cmd_run(settings: Settings, args: argparse.Namespace) -> int:
 def _cmd_tier0(settings: Settings, args: argparse.Namespace) -> int:
     state = StateStore(settings.data_dir)
     if not args.no_enqueue:
-        build_queue(settings, state, include_tagged=args.verify)
+        # Narrowing the directories is temporary, so it must not discard the rest of the queue.
+        build_queue(
+            settings, state, include_tagged=args.verify, prune=not args.scan_dir
+        )
     if args.enqueue_only:
         return 0
     run_tier0(

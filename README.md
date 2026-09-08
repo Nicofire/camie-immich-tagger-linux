@@ -274,6 +274,22 @@ slowly, honours the remaining daily quota, and resumes where it left off.
 By default Tier 0 only *adds* tags, and only looks at images that have a real copyright
 tag but no character tag.
 
+### Limiting a run to one folder
+
+`--scan-dir` overrides `CAMIE_SCAN_DIRS` for a single run and works with every command.
+Repeat it for several folders:
+
+```bash
+camie-tagger tier0 --scan-dir /mnt/media/series-a
+camie-tagger tier0 --scan-dir /mnt/media/series-a --scan-dir /mnt/media/series-b
+camie-tagger run --mode all --scan-dir /mnt/media/new-import
+camie-tagger stats --scan-dir /mnt/media/series-a
+```
+
+Only images inside those directories are queued and searched. Entries already queued for
+other folders stay in the queue untouched, and the queue pruner is skipped, so narrowing
+the scope never discards work.
+
 ### Match sources
 
 SauceNAO searches every index it has (`db=999`), not just Danbooru. When a match has a

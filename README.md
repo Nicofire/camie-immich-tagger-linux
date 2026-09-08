@@ -274,6 +274,29 @@ slowly, honours the remaining daily quota, and resumes where it left off.
 By default Tier 0 only *adds* tags, and only looks at images that have a real copyright
 tag but no character tag.
 
+### Match sources
+
+SauceNAO searches every index it has (`db=999`), not just Danbooru. When a match has a
+Danbooru post, its canonical tags are fetched from the Danbooru API. Otherwise the
+character, copyright and artist names SauceNAO itself reports are used, which covers
+Gelbooru, Konachan, yande.re, e621 and similar indexes. Indexes that only name an author,
+such as Pixiv and Kemono, contribute an `artist/` tag.
+
+If two matches are close in similarity, the Danbooru one wins, because only Danbooru
+tags are precise enough to replace existing tags.
+
+```bash
+camie-tagger tier0 --danbooru-only       # stricter: skip everything except Danbooru
+camie-tagger tier0 --min-similarity 80   # more hits, higher risk of a wrong match
+```
+
+A miss now reports the best score that was available, so you can tell a genuinely
+unindexed image from a threshold that is set too high:
+
+```
+miss 4q7sy82m73x51.jpg (best 62% on Pixiv)
+```
+
 ### Verifying and correcting existing tags
 
 The local model sometimes assigns the wrong character or copyright. `--verify` also
@@ -291,6 +314,8 @@ Safety rules:
 - **Only `character/`, `copyright/` and `artist/` tags can be replaced.** Your
   `general/` and `rating/` tags are never deleted, because a Danbooru post does not
   describe them.
+- **Only Danbooru matches may replace anything.** A hit from Konachan, yande.re, Pixiv or
+  any other index can add tags but never delete them.
 - **Replacing needs more confidence than adding.** A tag is only deleted at a similarity
   of 95% or higher (`--replace-min-similarity`). Below that, missing tags are still added
   and the existing ones are kept.

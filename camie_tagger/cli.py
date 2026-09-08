@@ -125,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="similarity required before an existing tag is replaced "
         f"(default: {DEFAULT_REPLACE_MIN_SIMILARITY:.0f})",
     )
+    tier0.add_argument(
+        "--danbooru-only",
+        action="store_true",
+        help="ignore matches that have no Danbooru post (fewer hits, better tags)",
+    )
 
     subparsers.add_parser(
         "immich-scan", parents=[common], help="trigger an Immich library and sidecar scan"
@@ -210,6 +215,7 @@ def _cmd_tier0(settings: Settings, args: argparse.Namespace) -> int:
         verify=args.verify,
         confirm=args.confirm,
         replace_min_similarity=args.replace_min_similarity,
+        danbooru_only=args.danbooru_only,
     )
     return 0
 

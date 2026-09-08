@@ -35,12 +35,44 @@ DANBOORU_TAG_FIELDS = {
     "tag_string_artist": "artist",
 }
 
+# SauceNAO already searches every index (db=999). These fields are returned by the
+# booru indexes (Danbooru, Gelbooru, Konachan, yande.re, e621), so a match outside
+# Danbooru is still usable even though the tags are less precise.
+SAUCENAO_TAG_FIELDS = {
+    "characters": "character",
+    "material": "copyright",
+    "creator": "artist",
+}
+
+# Indexes without a 'creator' field still name the author, e.g. Pixiv and Kemono.
+SAUCENAO_ARTIST_FALLBACKS = ("member_name", "user_name", "author_name")
+
+# Prefer a Danbooru result over a slightly better non-Danbooru one, because only
+# Danbooru tags are canonical enough to replace existing tags.
+DANBOORU_PREFERENCE_MARGIN = 3.0
+
+MAX_SOURCE_TAG_LENGTH = 100
+
 # Namespaces Danbooru is authoritative for. Verification never touches general/ or
 # rating/, which the local model owns and Danbooru results do not describe.
 VERIFIABLE_NAMESPACES = ("character", "copyright", "artist")
 
 # Deleting a tag needs more confidence than adding one.
 DEFAULT_REPLACE_MIN_SIMILARITY = 95.0
+
+
+@dataclass
+class Match:
+    similarity: float
+    index_name: str
+    post_id: int | None
+    tags: list[str]
+    # Danbooru API tags are canonical; SauceNAO metadata is only trusted enough to add.
+    canonical: bool = False
+
+    @property
+    def source(self) -> str:
+        return "danbooru" if self.canonical else (self.index_name or "saucenao")
 
 
 @dataclass
@@ -125,7 +157,72 @@ def _search_saucenao(session: requests.Session, api_key: str, image: Path) -> di
     return response.json()
 
 
-def _best_match(results: list[dict], min_similarity: float) -> tuple[float, int] | None:
+def _normalize_source_tag(value: str) -> str:
+    text = str(value).strip().lower()
+    if not text or "http" in text or len(text) > MAX_SOURCE_TAG_LENGTH:
+        return ""
+    return normalize_tag(re.sub(r"\s+", "_", text))
+
+
+def _split_values(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    return re.split(r"[,\n]", str(raw))
+
+
+def _tags_from_result(data: dict) -> list[str]:
+    """Build tags from SauceNAO's own metadata, for matches outside Danbooru."""
+    tags: list[str] = []
+    seen: set[str] = set()
+
+    for field, namespace in SAUCENAO_TAG_FIELDS.items():
+        for value in _split_values(data.get(field) or ""):
+            name = _normalize_source_tag(value)
+            tag = f"{namespace}/{name}"
+            if name and tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+
+    if not data.get("creator"):
+        for field in SAUCENAO_ARTIST_FALLBACKS:
+            for value in _split_values(data.get(field) or ""):
+                name = _normalize_source_tag(value)
+                tag = f"artist/{name}"
+                if name and tag not in seen:
+                    seen.add(tag)
+                    tags.append(tag)
+
+    return tags
+
+
+def _index_label(name: object) -> str:
+    """Turn 'Index #26: - Konachan.com - 1.jpg' into 'Konachan.com'."""
+    parts = [part.strip() for part in str(name).split(" - ") if part.strip()]
+    for part in parts[1:]:
+        if not part.lower().startswith("index #"):
+            return part[:40]
+    return (parts[0] if parts else "saucenao")[:40]
+
+
+def _danbooru_post_id(data: dict) -> int | None:
+    post_id = data.get("danbooru_id")
+    if post_id is None:
+        for url in data.get("ext_urls", []) or []:
+            found = DANBOORU_POST_PATTERN.search(str(url))
+            if found:
+                post_id = found.group(1)
+                break
+    try:
+        return int(post_id) if post_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _best_match(
+    results: list[dict], min_similarity: float, danbooru_only: bool = False
+) -> Match | None:
+    candidates: list[Match] = []
+
     for entry in results or []:
         header = entry.get("header", {})
         data = entry.get("data", {})
@@ -136,20 +233,29 @@ def _best_match(results: list[dict], min_similarity: float) -> tuple[float, int]
         if similarity < min_similarity:
             continue
 
-        post_id = data.get("danbooru_id")
-        if post_id is None:
-            for url in data.get("ext_urls", []) or []:
-                match = DANBOORU_POST_PATTERN.search(str(url))
-                if match:
-                    post_id = match.group(1)
-                    break
-        if post_id is None:
+        post_id = _danbooru_post_id(data)
+        if danbooru_only and post_id is None:
             continue
-        try:
-            return similarity, int(post_id)
-        except (TypeError, ValueError):
+        tags = _tags_from_result(data)
+        if post_id is None and not tags:
             continue
-    return None
+        candidates.append(
+            Match(similarity, _index_label(header.get("index_name", "")), post_id, tags)
+        )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda m: m.similarity, reverse=True)
+    best = candidates[0]
+    if best.post_id is None:
+        for candidate in candidates:
+            if (
+                candidate.post_id is not None
+                and candidate.similarity >= best.similarity - DANBOORU_PREFERENCE_MARGIN
+            ):
+                return candidate
+    return best
 
 
 def _fetch_danbooru_tags(session: requests.Session, post_id: int) -> list[str]:
@@ -173,18 +279,26 @@ def _apply_verification(
     state,
     result: Tier0Result,
     image: Path,
-    taglist: list[str],
-    similarity: float,
+    match: Match,
     confirm: bool,
     replace_min_similarity: float,
     record_progress: bool,
 ) -> None:
-    """Compare the sidecar against Danbooru, then add missing and drop wrong tags."""
+    """Compare the sidecar against the match, then add missing and drop wrong tags."""
     log = get_logger()
+    similarity = match.similarity
     existing = sidecar.read_taglist(settings.exiftool, image)
-    to_add, to_remove = plan_changes(existing, taglist)
+    to_add, to_remove = plan_changes(existing, match.tags)
 
-    if to_remove and similarity < replace_min_similarity:
+    if to_remove and not match.canonical:
+        log.info(
+            "%s: matched on %s rather than Danbooru, keeping %d existing tag(s)",
+            image.name,
+            match.source,
+            len(to_remove),
+        )
+        to_remove = []
+    elif to_remove and similarity < replace_min_similarity:
         log.info(
             "%s: %.0f%% is below the %.0f%% replace threshold, keeping %d existing tag(s)",
             image.name,
@@ -199,7 +313,6 @@ def _apply_verification(
         if record_progress:
             state.record_tier0(image, f"verified:{similarity:.0f}%")
         return
-
     if to_remove:
         result.corrected += 1
         log.info("%s: replacing %s", image.name, ", ".join(to_remove))
@@ -220,7 +333,7 @@ def _apply_verification(
         result.failed += 1
         log.error("%s: %s", image, outcome[4:])
         return
-    log.info("hit %.0f%% %s [%s]", similarity, image.name, outcome)
+    log.info("hit %.0f%% %s via %s [%s]", similarity, image.name, match.source, outcome)
     if record_progress:
         state.record_tier0(
             image, f"corrected:{similarity:.0f}%:+{len(to_add)}-{len(to_remove)}"
@@ -235,6 +348,7 @@ def run_tier0(
     verify: bool = False,
     confirm: bool = False,
     replace_min_similarity: float = DEFAULT_REPLACE_MIN_SIMILARITY,
+    danbooru_only: bool = False,
 ) -> Tier0Result:
     log = get_logger()
     settings.require_saucenao()
@@ -275,6 +389,8 @@ def run_tier0(
                 "Dry run: nothing is written and progress is NOT recorded, so these "
                 "searches will run again. Add --confirm to apply the changes."
             )
+    if danbooru_only:
+        log.info("Only Danbooru matches are accepted.")
 
     # In a verify dry run the results are not persisted, so the queue stays intact.
     record_progress = confirm or not verify
@@ -297,25 +413,37 @@ def run_tier0(
                 break
 
             result.processed += 1
-            match = _best_match(payload.get("results", []), min_similarity)
+            match = _best_match(
+                payload.get("results", []), min_similarity, danbooru_only
+            )
 
             if match is None:
                 result.misses += 1
+                top = (payload.get("results") or [{}])[0].get("header", {})
+                log.info(
+                    "miss %s (best %s%% on %s)",
+                    image.name,
+                    top.get("similarity", "?"),
+                    _index_label(top.get("index_name", "unknown")),
+                )
                 if record_progress:
                     state.record_tier0(image, "miss")
-                log.info("miss %s", image.name)
             else:
-                similarity, post_id = match
-                try:
-                    taglist = _fetch_danbooru_tags(session, post_id)
-                except requests.RequestException as exc:
-                    result.failed += 1
-                    if record_progress:
-                        state.record_tier0(image, f"danbooru_error:{str(exc)[:60]}")
-                    log.error("Danbooru lookup failed for post %s: %s", post_id, exc)
-                    taglist = []
+                if match.post_id is not None:
+                    try:
+                        danbooru_tags = _fetch_danbooru_tags(session, match.post_id)
+                        if danbooru_tags:
+                            match.tags = danbooru_tags
+                            match.canonical = True
+                    except requests.RequestException as exc:
+                        log.warning(
+                            "Danbooru lookup failed for post %s, falling back to %s: %s",
+                            match.post_id,
+                            match.source,
+                            exc,
+                        )
 
-                if taglist:
+                if match.tags:
                     result.hits += 1
                     if verify:
                         _apply_verification(
@@ -323,26 +451,34 @@ def run_tier0(
                             state,
                             result,
                             image,
-                            taglist,
-                            similarity,
+                            match,
                             confirm,
                             replace_min_similarity,
                             record_progress,
                         )
                     else:
-                        outcome = sidecar.write_taglist(settings.exiftool, image, taglist)
-                        characters = tags_in_namespace(taglist, "character")
+                        outcome = sidecar.write_taglist(
+                            settings.exiftool, image, match.tags
+                        )
+                        characters = tags_in_namespace(match.tags, "character")
                         if record_progress:
                             state.record_tier0(
-                                image, f"hit:{similarity:.0f}%:{','.join(characters)}"
+                                image,
+                                f"hit:{match.similarity:.0f}%:{','.join(characters)}",
                             )
                         log.info(
-                            "hit %.0f%% %s -> %s [%s]",
-                            similarity,
+                            "hit %.0f%% %s via %s -> %s [%s]",
+                            match.similarity,
                             image.name,
+                            match.source,
                             ", ".join(characters) or "no character tag",
                             outcome,
                         )
+                else:
+                    result.misses += 1
+                    if record_progress:
+                        state.record_tier0(image, "miss:no_tags")
+                    log.info("miss %s (match had no usable tags)", image.name)
 
             state.save_progress()
 

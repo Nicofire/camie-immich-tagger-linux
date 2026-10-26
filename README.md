@@ -52,8 +52,8 @@ Key properties:
 ## Installation
 
 ```bash
-sudo git clone https://github.com/PlanetMeow/camie-immich-tagger.git /opt/camie-immich-tagger
-cd /opt/camie-immich-tagger/camie-immich-tagger-linux
+sudo git clone https://github.com/Nicofire/camie-immich-tagger-linux /opt/camie-immich-tagger-linux
+cd /opt/camie-immich-tagger-linux
 sudo ./install.sh
 ```
 

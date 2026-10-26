@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .config import ConfigError, Settings, load_settings
+from .config import ConfigError, Settings, load_settings, validate_threshold
 from .devices import DEVICE_CHOICES, DeviceError
 from .doctor import run_doctor
 from .immich import ImmichClient, ImmichError, trigger_scan
@@ -90,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--limit", type=int, help="maximum number of images to process")
     run.add_argument("--threshold", type=float, help="confidence threshold (0-1)")
     run.add_argument(
+        "--category-threshold",
+        action="append",
+        metavar="CATEGORY=VALUE",
+        help="override one category threshold; repeatable",
+    )
+    run.add_argument(
         "--tier0", action="store_true", help="run the SauceNAO backfill afterwards"
     )
     run.add_argument(
@@ -100,6 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dry-run", action="store_true", help="predict tags but do not write anything"
     )
+    run.add_argument("--reprocess", action="store_true", help="also predict already tagged images (all/test)")
+    run.add_argument(
+        "--allow-tag-removal", action="store_true",
+        help="allow reprocessing to remove obsolete model-owned tags; requires --confirm or --dry-run",
+    )
+    run.add_argument("--confirm", action="store_true", help="confirm tag removals during reprocessing")
 
     tier0 = subparsers.add_parser(
         "tier0", parents=[common], help="SauceNAO reverse search backfill"
@@ -137,6 +149,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="ignore matches that have no Danbooru post (fewer hits, better tags)",
     )
+    tier0.add_argument(
+        "--allow-tag-removal", action="store_true",
+        help="allow --verify to remove tracked automatic tags; untracked tags stay protected",
+    )
 
     subparsers.add_parser(
         "immich-scan", parents=[common], help="trigger an Immich library and sidecar scan"
@@ -162,6 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _settings_from_args(args: argparse.Namespace) -> Settings:
     scan_dirs = [Path(p).expanduser() for p in args.scan_dir] if args.scan_dir else None
+    category_thresholds: dict[str, float] = {}
+    for entry in getattr(args, "category_threshold", None) or []:
+        category, separator, value = entry.partition("=")
+        if not separator:
+            raise ConfigError("--category-threshold requires CATEGORY=VALUE")
+        category_thresholds[category.strip()] = validate_threshold(value, entry)
     settings = load_settings(
         args.config,
         scan_dirs=scan_dirs,
@@ -172,6 +194,8 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
         fail_on_cpu_fallback=args.fail_on_cpu_fallback,
         log_level=args.log_level,
         log_file=args.log_file,
+        threshold=getattr(args, "threshold", None),
+        category_thresholds=category_thresholds or None,
     )
     redactor.add(*settings.secrets())
     setup_logging(
@@ -190,6 +214,10 @@ def _immich_scan(settings: Settings) -> int:
 
 
 def _cmd_run(settings: Settings, args: argparse.Namespace) -> int:
+    if args.allow_tag_removal and not args.reprocess:
+        raise ConfigError("--allow-tag-removal requires --reprocess")
+    if args.allow_tag_removal and not (args.confirm or args.dry_run):
+        raise ConfigError("Preview removals with --dry-run, then apply with --confirm")
     state = StateStore(settings.data_dir)
     result = run_tagging(
         settings,
@@ -198,28 +226,35 @@ def _cmd_run(settings: Settings, args: argparse.Namespace) -> int:
         limit=args.limit,
         threshold=args.threshold,
         dry_run=args.dry_run,
+        reprocess=args.reprocess,
+        allow_tag_removal=args.allow_tag_removal,
     )
 
     exit_code = 0
+    failed = bool(result.failed)
     if args.tier0 and not args.dry_run:
         build_queue(settings, state)
-        run_tier0(settings, state)
+        tier0_result = run_tier0(settings, state)
+        failed = failed or bool(tier0_result.failed)
     if args.immich_scan and not args.dry_run:
         exit_code = _immich_scan(settings)
 
-    return 1 if result.failed and result.tagged == 0 else exit_code
+    return 1 if failed else exit_code
 
 
 def _cmd_tier0(settings: Settings, args: argparse.Namespace) -> int:
+    if args.allow_tag_removal and not args.verify:
+        raise ConfigError("--allow-tag-removal requires --verify")
     state = StateStore(settings.data_dir)
     if not args.no_enqueue:
         # Narrowing the directories is temporary, so it must not discard the rest of the queue.
         build_queue(
-            settings, state, include_tagged=args.verify, prune=not args.scan_dir
+            settings, state, include_tagged=args.verify, prune=not args.scan_dir,
+            persist=args.enqueue_only or not args.verify or args.confirm,
         )
     if args.enqueue_only:
         return 0
-    run_tier0(
+    result = run_tier0(
         settings,
         state,
         limit=args.limit,
@@ -228,8 +263,9 @@ def _cmd_tier0(settings: Settings, args: argparse.Namespace) -> int:
         confirm=args.confirm,
         replace_min_similarity=args.replace_min_similarity,
         danbooru_only=args.danbooru_only,
+        allow_tag_removal=args.allow_tag_removal,
     )
-    return 0
+    return 1 if result.failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:

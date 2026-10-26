@@ -7,6 +7,7 @@ SauceNAO tier is rate limited, so this is a slow, resumable background job.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from pathlib import Path
 import requests
 
 from . import sidecar
-from .config import Settings
+from .config import ConfigError, Settings
 from .logging_setup import get_logger
 from .tags import normalize_tag, tags_in_namespace
 
@@ -104,7 +105,8 @@ def plan_changes(existing: list[str], danbooru: list[str]) -> tuple[list[str], l
 
 
 def build_queue(
-    settings: Settings, state, include_tagged: bool = False, prune: bool = True
+    settings: Settings, state, include_tagged: bool = False, prune: bool = True,
+    persist: bool = True,
 ) -> int:
     """Queue images that have a real copyright tag but no character tag.
 
@@ -139,7 +141,8 @@ def build_queue(
             candidates.append(image)
 
     added = state.enqueue_tier0(candidates)
-    state.save_queue()
+    if persist:
+        state.save_queue()
     log.info("Queued %d new images (queue size: %d)", added, len(state.tier0_queue))
     return added
 
@@ -234,7 +237,7 @@ def _best_match(
             similarity = float(header.get("similarity", 0))
         except (TypeError, ValueError):
             continue
-        if similarity < min_similarity:
+        if not math.isfinite(similarity) or not 0 <= similarity <= 100 or similarity < min_similarity:
             continue
 
         post_id = _danbooru_post_id(data)
@@ -287,14 +290,24 @@ def _apply_verification(
     confirm: bool,
     replace_min_similarity: float,
     record_progress: bool,
+    allow_tag_removal: bool = False,
 ) -> None:
     """Compare the sidecar against the match, then add missing and drop wrong tags."""
     log = get_logger()
     similarity = match.similarity
-    existing = sidecar.read_taglist(settings.exiftool, image)
+    try:
+        existing = sidecar.read_taglist(settings.exiftool, image)
+    except sidecar.ExiftoolError as exc:
+        result.failed += 1
+        log.error("%s: %s", image, exc)
+        return
     to_add, to_remove = plan_changes(existing, match.tags)
+    owned = state.managed_tags(image)
+    to_remove = [tag for tag in to_remove if tag in owned]
 
-    if to_remove and not match.canonical:
+    if not allow_tag_removal:
+        to_remove = []
+    elif to_remove and not match.canonical:
         log.info(
             "%s: matched on %s rather than Danbooru, keeping %d existing tag(s)",
             image.name,
@@ -313,12 +326,15 @@ def _apply_verification(
         to_remove = []
 
     if not to_add and not to_remove:
-        log.info("ok %.0f%% %s (tags already match)", similarity, image.name)
+        log.info("ok %.0f%% %s (no permitted tag changes)", similarity, image.name)
         if record_progress:
+            if match.canonical:
+                state.update_managed_tags(
+                    image, sorted(owned.intersection(match.tags)), source="tier0"
+                )
             state.record_tier0(image, f"verified:{similarity:.0f}%")
         return
     if to_remove:
-        result.corrected += 1
         log.info("%s: replacing %s", image.name, ", ".join(to_remove))
     if to_add:
         log.info("%s: adding %s", image.name, ", ".join(to_add))
@@ -337,8 +353,16 @@ def _apply_verification(
         result.failed += 1
         log.error("%s: %s", image, outcome[4:])
         return
+    if to_remove:
+        result.corrected += 1
     log.info("hit %.0f%% %s via %s [%s]", similarity, image.name, match.source, outcome)
     if record_progress:
+        claimed = set(to_add)
+        if match.canonical:
+            claimed.update(owned.intersection(match.tags))
+        state.update_managed_tags(
+            image, sorted(claimed), sorted(owned.difference(existing).union(to_remove)), source="tier0"
+        )
         state.record_tier0(
             image, f"corrected:{similarity:.0f}%:+{len(to_add)}-{len(to_remove)}"
         )
@@ -353,6 +377,7 @@ def run_tier0(
     confirm: bool = False,
     replace_min_similarity: float = DEFAULT_REPLACE_MIN_SIMILARITY,
     danbooru_only: bool = False,
+    allow_tag_removal: bool = False,
 ) -> Tier0Result:
     log = get_logger()
     settings.require_saucenao()
@@ -361,7 +386,15 @@ def run_tier0(
     min_similarity = (
         min_similarity if min_similarity is not None else settings.tier0_min_similarity
     )
-    cap = limit or settings.tier0_daily_cap
+    for name, value in (
+        ("Minimum similarity", min_similarity),
+        ("Replacement similarity", replace_min_similarity),
+    ):
+        if not math.isfinite(value) or not 0 <= value <= 100:
+            raise ConfigError(f"{name} must be a finite percentage from 0 to 100")
+    cap = limit if limit is not None else settings.tier0_daily_cap
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0:
+        raise ConfigError("Tier 0 search limit must be a positive integer")
 
     progress = state.tier0_progress
     # The queue may span several directories, so honour the configured scan dirs here too.
@@ -418,6 +451,7 @@ def run_tier0(
             header = payload.get("header", {})
             if header.get("status", -1) != 0:
                 log.error("SauceNAO returned status %s; stopping.", header.get("status"))
+                result.failed += 1
                 break
 
             result.processed += 1
@@ -463,13 +497,26 @@ def run_tier0(
                             confirm,
                             replace_min_similarity,
                             record_progress,
+                            allow_tag_removal,
                         )
                     else:
-                        outcome = sidecar.write_taglist(
-                            settings.exiftool, image, match.tags
-                        )
+                        try:
+                            before = set(sidecar.read_taglist(settings.exiftool, image))
+                            outcome = sidecar.write_taglist(settings.exiftool, image, match.tags)
+                        except sidecar.ExiftoolError as exc:
+                            outcome = f"ERR:{exc}"
                         characters = tags_in_namespace(match.tags, "character")
-                        if record_progress:
+                        if outcome.startswith("ERR:"):
+                            result.failed += 1
+                            log.error("%s: %s", image, outcome[4:])
+                        elif record_progress:
+                            owned = state.managed_tags(image)
+                            claimed = set(match.tags).difference(before)
+                            if match.canonical:
+                                claimed.update(owned.intersection(match.tags))
+                            state.update_managed_tags(
+                                image, sorted(claimed), sorted(owned.difference(before)), source="tier0"
+                            )
                             state.record_tier0(
                                 image,
                                 f"hit:{match.similarity:.0f}%:{','.join(characters)}",
@@ -488,7 +535,9 @@ def run_tier0(
                         state.record_tier0(image, "miss:no_tags")
                     log.info("miss %s (match had no usable tags)", image.name)
 
-            state.save_progress()
+            if record_progress:
+                state.save_processed()
+                state.save_progress()
 
             long_remaining = header.get("long_remaining")
             if isinstance(long_remaining, int) and long_remaining <= LONG_REMAINING_MARGIN:
@@ -502,7 +551,10 @@ def run_tier0(
     except KeyboardInterrupt:
         log.warning("Interrupted; progress has been saved.")
     finally:
-        state.save_progress()
+        if record_progress:
+            state.save_processed()
+            state.save_progress()
+        session.close()
 
     log.info("Tier 0 done: %s", result.summary())
     return result

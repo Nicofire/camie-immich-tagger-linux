@@ -168,6 +168,7 @@ Precedence, highest first: **command line option → environment variable → `.
 | `IMMICH_API_KEY` | Immich API key |
 | `IMMICH_LIBRARY_IDS` | Comma-separated External Library **UUIDs** |
 | `CAMIE_THRESHOLD` | Confidence threshold, `0.0`–`1.0` (default `0.5`) |
+| `CAMIE_CATEGORY_THRESHOLDS` | JSON category overrides, e.g. `{"character":0.6,"copyright":0.6}` (default `{}`) |
 | `CAMIE_DEVICE` | `auto`, `intel`, `nvidia`, `amd` or `cpu` |
 | `SAUCENAO_API_KEY` | Optional, only for the Tier 0 backfill |
 | `CAMIE_TIER0_MIN_SIMILARITY` | Minimum match similarity, default `88` |
@@ -250,16 +251,72 @@ camie-tagger run --mode recent --tier0 --immich-scan
 | `--mode test\|recent\|all` | Sample / only new images / the whole library |
 | `--limit N` | Process at most N images |
 | `--threshold 0.45` | Override the confidence threshold |
+| `--category-threshold character=0.6` | Override one category; repeatable |
 | `--dry-run` | Predict and report, write nothing |
+| `--reprocess` | Predict already tagged images too; requires `--mode all` or `test` |
+| `--allow-tag-removal` | Permit removal of obsolete model-owned tags during reprocessing |
+| `--confirm` | Confirm removals; otherwise use `--dry-run` to preview them |
 | `--tier0` | Run the SauceNAO backfill afterwards |
 | `--immich-scan` | Trigger the Immich library and sidecar scan at the end |
 
 Images that already carry tags from this tool are skipped, so re-running is cheap.
 
+### Improving tag quality
+
+Preprocessing preserves the aspect ratio, uses Lanczos resizing and centered padding,
+and applies EXIF orientation before inference. The input remains ImageNet-normalized
+RGB at 512x512, matching Camie's reference inference geometry.
+
+Separate thresholds can be set for `character`, `copyright`, `artist`, `general` and
+`rating`. A category override takes precedence over the global fallback, even if its
+value is lower. Values must be finite numbers from 0 to 1, inclusive. Defaults remain
+unchanged: global `0.5`, no category overrides.
+
+```bash
+# Illustrative values, not a claim that these thresholds fit every collection
+camie-tagger run --mode test --dry-run \
+  --category-threshold character=0.6 --category-threshold copyright=0.6
+```
+
+CLI category overrides merge with `CAMIE_CATEGORY_THRESHOLDS`, retaining categories
+not mentioned on the command line. For each category: CLI overrides environment, which
+overrides `.env`. Lower values find more tags but can introduce false positives; higher
+values can miss valid characters. Scores are not calibrated guarantees of correctness.
+
+For an existing library, start with an additive reprocessing preview:
+
+```bash
+camie-tagger run --mode all --reprocess --limit 20 --dry-run
+camie-tagger run --mode all --reprocess --limit 20
+
+# Preview obsolete automatic tags, then explicitly confirm their removal
+camie-tagger run --mode all --reprocess --allow-tag-removal --limit 20 --dry-run
+camie-tagger run --mode all --reprocess --allow-tag-removal --limit 20 --confirm
+```
+
+Reprocessing is additive unless removal is explicitly enabled. Only tags recorded as
+written by the local model can be removed by local reprocessing. Untracked/manual tags
+and tags confirmed by Tier 0 remain protected. Older sidecars are not automatically
+adopted as model-owned tags; existing mistakes in them need manual review.
+
+An identical tag value later reused manually cannot be distinguished from the original
+automatic tag. Leave removal disabled when that distinction matters. Review a small
+preview and retain backups before enabling removals.
+
+To evaluate quality, use a representative set of your own images, including uncommon
+characters and multiple aspect ratios. Tune on one subset and evaluate character/series
+precision and recall on a separate held-out subset. Change preprocessing and thresholds
+separately when comparing versions. Measure time per image and memory on the actual
+Intel iGPU before considering a larger model. No accuracy gain or faster inference is
+implied by the unit tests; these checks still require labeled images and real hardware.
+
 ### Tier 0: SauceNAO backfill
 
 Optional. Finds images that have a real copyright tag but no character tag, and looks
 them up by reverse image search to recover specific character names.
+
+This optional step uploads the image to SauceNAO. Local model inference does not
+upload images.
 
 ```bash
 camie-tagger tier0                      # update the queue, then search
@@ -317,16 +374,23 @@ miss 4q7sy82m73x51.jpg (best 62% on Pixiv)
 
 The local model sometimes assigns the wrong character or copyright. `--verify` also
 queues images that already have character tags, compares them against the matching
-Danbooru post, adds what is missing and replaces what is wrong.
+Danbooru post and adds missing tags. Removal of tracked automatic tags can be enabled
+separately.
 
 ```bash
-camie-tagger tier0 --verify --limit 10             # preview, writes nothing
-camie-tagger tier0 --verify --confirm --limit 10   # apply the changes
+camie-tagger tier0 --verify --limit 10             # preview additions, writes nothing
+camie-tagger tier0 --verify --confirm --limit 10   # apply additions only
+
+# Removal needs a separate explicit opt-in, and only affects tracked automatic tags
+camie-tagger tier0 --verify --allow-tag-removal --limit 10
+camie-tagger tier0 --verify --allow-tag-removal --confirm --limit 10
 ```
 
 Safety rules:
 
 - **Dry run by default.** Without `--confirm` nothing is written.
+- **Additive by default.** `--confirm` alone no longer permits deletions. Removing tags
+  also requires `--allow-tag-removal` and a recorded automatic origin.
 - **Only `character/`, `copyright/` and `artist/` tags can be replaced.** Your
   `general/` and `rating/` tags are never deleted, because a Danbooru post does not
   describe them.
@@ -335,10 +399,17 @@ Safety rules:
 - **Replacing needs more confidence than adding.** A tag is only deleted at a similarity
   of 95% or higher (`--replace-min-similarity`). Below that, missing tags are still added
   and the existing ones are kept.
-- Manual tags outside those three namespaces are untouched.
+- Untracked/manual tags are protected in all namespaces. Legacy tags are not assumed
+  to be automatic just because their namespace matches.
 
 In a `--verify` dry run, progress is deliberately not recorded, so the same images are
 searched again when you re-run with `--confirm`. Use `--limit` to keep that cheap.
+The preview also leaves the queue and processed-state files unchanged. Explicit
+`--enqueue-only` still persists the queue.
+
+Failed sidecar writes are reported as failures and are not recorded as completed
+searches, so a later run can retry them. `hits` counts usable search matches, including
+matches whose subsequent write fails; check `failed` as well.
 
 ### Immich, statistics and cleanup
 
@@ -384,12 +455,46 @@ rotating log, so no output redirection is required.
 | Location | Contents |
 | --- | --- |
 | `logs/camie-tagger.log` | Rotating log, 10 MB per file, 5 kept |
-| `data/processed.json` | Images already tagged |
+| `data/processed.json` | Processed images, automatic tag origins and inference profiles |
 | `data/tier0_queue.json` | Images waiting for reverse search |
 | `data/tier0_progress.json` | Reverse search results, used to resume |
 
-Errors go to the log rather than to separate text files. To re-tag everything from
-scratch, delete `data/processed.json` and run `--mode all`.
+Errors go to the log rather than to separate text files. Successful writes are verified
+by reading the tags back. Unreadable sidecars and failed directory scans stop safe
+processing rather than being treated as empty metadata. Commands return a nonzero exit
+code for processing failures, including partial failures.
+
+Limited runs and narrowed scan directories preserve records outside the selection.
+The state records a model/metadata fingerprint, preprocessing version and thresholds
+for new inference runs. Keep this state: deleting it loses automatic-tag ownership and
+does not force existing sidecars to be tagged again. Use `--reprocess` instead.
+
+---
+
+## Development and tests
+
+```bash
+python -m pip install -e ".[test]"
+python -m pytest -q -m "not integration"
+python -m pytest -m "not integration" --cov=camie_tagger --cov-branch --cov-report=term-missing
+```
+
+Unit tests use generated images, temporary state and fake inference sessions. They
+block network requests and do not require ONNX Runtime, model weights, a GPU, API
+keys or a running Immich instance.
+
+For real XMP roundtrips, install exiftool and run:
+
+```bash
+sudo apt-get install -y libimage-exiftool-perl
+python -m pytest -q -m integration
+```
+
+Integration tests skip when exiftool is absent. They check sidecar creation, merging,
+idempotency, selective removal, manual-tag preservation and unchanged original image
+bytes. GitHub Actions runs unit tests on Python 3.10 and 3.12, plus a Linux job with
+real exiftool. Actual ONNX/OpenVINO inference and Immich import still need a smoke test
+on the target system with copies of a few images.
 
 ---
 

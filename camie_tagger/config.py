@@ -5,11 +5,15 @@ Precedence, highest first: CLI argument, process environment, .env file, built-i
 
 from __future__ import annotations
 
+import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from .tags import CATEGORIES_TO_WRITE
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
@@ -38,6 +42,7 @@ class Settings:
     library_ids: list[str] = field(default_factory=list)
     saucenao_api_key: str = ""
     threshold: float = 0.5
+    category_thresholds: dict[str, float] = field(default_factory=dict)
     device: str = "auto"
     fail_on_cpu_fallback: bool = False
     tier0_min_similarity: float = 88.0
@@ -123,6 +128,29 @@ def _as_int(value: str | None, key: str) -> int | None:
         raise ConfigError(f"{key} must be an integer, got {value!r}") from exc
 
 
+def validate_threshold(value: object, key: str = "Threshold") -> float:
+    try:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ValueError("unsupported threshold value")
+        threshold = float(value)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ConfigError(f"{key} must be a number between 0 and 1, got {value!r}") from exc
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ConfigError(f"{key} must be between 0 and 1, got {value!r}")
+    return threshold
+
+
+def validate_category_thresholds(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ConfigError("Category thresholds must be a JSON object")
+    thresholds: dict[str, float] = {}
+    for category, threshold in value.items():
+        if category not in CATEGORIES_TO_WRITE:
+            raise ConfigError(f"Unknown threshold category: {category!r}")
+        thresholds[category] = validate_threshold(threshold, f"Threshold for {category}")
+    return thresholds
+
+
 def load_settings(config_path: str | os.PathLike[str] | None = None, **overrides) -> Settings:
     """Build Settings from the .env file, the environment and explicit overrides."""
     overrides = {k: v for k, v in overrides.items() if v is not None}
@@ -157,9 +185,18 @@ def load_settings(config_path: str | os.PathLike[str] | None = None, **overrides
     settings.library_ids = _as_str_list(_get("IMMICH_LIBRARY_IDS"))
     settings.saucenao_api_key = _get("SAUCENAO_API_KEY") or settings.saucenao_api_key
 
-    threshold = _as_float(_get("CAMIE_THRESHOLD"), "CAMIE_THRESHOLD")
-    if threshold is not None:
-        settings.threshold = threshold
+    if "threshold" not in overrides:
+        threshold = _as_float(_get("CAMIE_THRESHOLD"), "CAMIE_THRESHOLD")
+        if threshold is not None:
+            settings.threshold = threshold
+    category_thresholds = _get("CAMIE_CATEGORY_THRESHOLDS")
+    if category_thresholds is not None:
+        try:
+            settings.category_thresholds = json.loads(category_thresholds)
+        except ValueError as exc:
+            raise ConfigError("CAMIE_CATEGORY_THRESHOLDS must be a JSON object") from exc
+        if not isinstance(settings.category_thresholds, dict):
+            raise ConfigError("CAMIE_CATEGORY_THRESHOLDS must be a JSON object")
     settings.device = _get("CAMIE_DEVICE") or settings.device
 
     min_similarity = _as_float(
@@ -181,9 +218,11 @@ def load_settings(config_path: str | os.PathLike[str] | None = None, **overrides
             value = value.rstrip("/")
         if key in {"model_dir", "data_dir", "log_dir", "log_file"} and value is not None:
             value = Path(value).expanduser()
+        if key == "category_thresholds":
+            value = {**settings.category_thresholds, **validate_category_thresholds(value)}
         setattr(settings, key, value)
 
-    if not 0.0 < settings.threshold <= 1.0:
-        raise ConfigError(f"Threshold must be between 0 and 1, got {settings.threshold}")
+    settings.threshold = validate_threshold(settings.threshold)
+    settings.category_thresholds = validate_category_thresholds(settings.category_thresholds)
 
     return settings

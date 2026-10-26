@@ -78,13 +78,50 @@ class StateStore:
         return self._processed.data
 
     def is_processed(self, image_path: Path) -> bool:
-        return str(image_path) in self.processed
+        record = self.processed.get(str(image_path))
+        return record is not None and not record.get("provenance_only", False)
 
-    def mark_processed(self, image_path: Path, tag_count: int, result: str) -> None:
-        self.processed[str(image_path)] = {
+    def mark_processed(
+        self, image_path: Path, tag_count: int, result: str, *, profile: dict | None = None
+    ) -> None:
+        record = self.processed.get(str(image_path), {}).copy()
+        record.pop("provenance_only", None)
+        record.update({
             "tagged_at": _utc_now(),
             "tags": tag_count,
             "result": result,
+        })
+        if profile is not None:
+            record["profile"] = profile
+        self.processed[str(image_path)] = record
+
+    def managed_tags(self, image_path: Path, source: str | None = None) -> set[str]:
+        record = self.processed.get(str(image_path), {})
+        tags = record.get("managed_tags", [])
+        if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+            return set()
+        if source is None:
+            return set(tags)
+        sources = record.get("tag_sources", {})
+        if not isinstance(sources, dict):
+            return set()
+        return {tag for tag in tags if sources.get(tag) == source}
+
+    def update_managed_tags(
+        self,
+        image_path: Path,
+        add: list[str],
+        remove: list[str] | tuple[str, ...] = (),
+        *,
+        source: str = "model",
+    ) -> None:
+        record = self.processed.setdefault(str(image_path), {"provenance_only": True})
+        tags = self.managed_tags(image_path).difference(remove).union(add)
+        old_sources = record.get("tag_sources", {})
+        sources = old_sources if isinstance(old_sources, dict) else {}
+        record["managed_tags"] = sorted(tags)
+        record["tag_sources"] = {
+            tag: source if tag in add else sources.get(tag, "unknown") for tag in sorted(tags)
         }
 
     def replace_processed(self, records: dict[str, dict]) -> None:

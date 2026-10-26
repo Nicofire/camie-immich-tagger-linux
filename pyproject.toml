@@ -16,6 +16,9 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7.4", "pytest-cov>=4.1"]
+
 # onnxruntime is intentionally NOT listed: install.sh picks the hardware-specific
 # variant (onnxruntime-openvino / onnxruntime-gpu / onnxruntime).
 
@@ -24,3 +27,7 @@ camie-tagger = "camie_tagger.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["camie_tagger*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: requires a real exiftool installation"]

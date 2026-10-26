@@ -29,7 +29,10 @@ def build_taglist(
         for name, _score in prediction.get(category, []):
             if category == "rating":
                 name = name.removeprefix("rating_")
-            tag = f"{category}/{normalize_tag(name)}"
+            name = normalize_tag(name).strip()
+            if not name:
+                continue
+            tag = f"{category}/{name}"
             if tag not in seen:
                 seen.add(tag)
                 taglist.append(tag)

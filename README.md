@@ -59,7 +59,8 @@ sudo ./install.sh
 
 The installer detects your GPU, installs the matching ONNX Runtime build, installs
 `exiftool` and the Python package into a virtual environment, downloads the model, and
-creates a `.env` file with mode `600`.
+creates a `.env` file with mode `600`. It also registers the `camie-tagger` command
+through a symlink in `/usr/local/bin`.
 
 Options:
 
@@ -69,11 +70,26 @@ Options:
 | `--skip-model` | Do not download the model |
 | `--skip-apt` | Do not install system packages |
 
-For convenience, put the command on your `PATH`:
+After installation, run the command from any directory without activating the virtual
+environment:
 
 ```bash
-sudo ln -s /opt/camie-immich-tagger/camie-immich-tagger-linux/venv/bin/camie-tagger /usr/local/bin/camie-tagger
+camie-tagger doctor
+camie-tagger run --mode test --limit 5 --dry-run
 ```
+
+For an existing installation, register it manually from the project directory:
+
+```bash
+sudo ln -sT -- "$PWD/venv/bin/camie-tagger" /usr/local/bin/camie-tagger
+command -v camie-tagger
+```
+
+The installer leaves an existing file or a link to another installation unchanged and
+prints a warning. A link to the current installation is reused. If registration fails,
+the installation remains usable via `./venv/bin/camie-tagger` from the project directory.
+`/usr/local/bin` must be on your `PATH` for the short command to work. The link still
+uses the project's virtual environment, so keep that installation in place.
 
 ---
 

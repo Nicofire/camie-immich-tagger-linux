@@ -22,6 +22,26 @@ info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARNING:\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
+register_command() {
+    local target="$1" link="$2"
+    if [ -L "$link" ] && [ "$link" -ef "$target" ]; then
+        info "Command already registered: $link"
+    elif [ -e "$link" ] || [ -L "$link" ]; then
+        warn "$link already exists; leaving it unchanged. Use $target instead."
+        return 0
+    elif $SUDO mkdir -p "$(dirname "$link")" && $SUDO ln -sT -- "$target" "$link"; then
+        info "Registered command: $link -> $target"
+    else
+        warn "Could not register $link. Use $target instead."
+        return 0
+    fi
+
+    case ":$PATH:" in
+        *":$(dirname "$link"):"*) ;;
+        *) warn "$(dirname "$link") is not on PATH. Use $target or add that directory to PATH." ;;
+    esac
+}
+
 usage() {
     sed -n '3,9p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -137,6 +157,8 @@ if [ "$DEVICE" = "intel" ] || [ "$DEVICE" = "amd" ]; then
         warn "  lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir"
     fi
 fi
+
+register_command "$VENV_DIR/bin/camie-tagger" "/usr/local/bin/camie-tagger"
 
 cat <<EOF
 

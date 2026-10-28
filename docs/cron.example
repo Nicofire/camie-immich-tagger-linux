@@ -1,22 +1,28 @@
 # camie-immich-tagger cron examples.
 #
-# Install for the current user with:  crontab -e
-# Adjust the path if you cloned somewhere other than /opt/camie-immich-tagger.
+# Install for the runtime account with: crontab -e
+# These are user-crontab entries (no username column), in the server's timezone.
+# Adjust the checkout path everywhere if you did not use the README default.
 #
-# The tool writes its own rotating log (CAMIE_LOG_DIR), so redirecting output is
-# only needed if you also want cron's view of the run.
+# Requirements: /usr/bin/flock (util-linux), mounted image storage, and read/write
+# permissions for configuration, sidecars, logs and state. The runtime account
+# must be able to create/open LOCK; choose a protected writable path if non-root.
+# Use this same lock for manual runs and other jobs touching the same state.
+# A busy lock skips a run; it does not wait. Immich jobs continue asynchronously.
+# The tool writes its own rotating log. Monitor cron output/exit status too.
+# See operations.md for scheduling, account permissions and import caveats.
 
-CAMIE=/opt/camie-immich-tagger/camie-immich-tagger-linux/venv/bin/camie-tagger
+CAMIE=/opt/camie-immich-tagger-linux/venv/bin/camie-tagger
+LOCK=/run/lock/camie-tagger.lock
 
 # Every night at 03:00: tag new images, then let Immich import the sidecars.
-0 3 * * * $CAMIE run --mode recent --immich-scan
+0 3 * * * /usr/bin/flock -n "$LOCK" "$CAMIE" run --mode recent --immich-scan
 
-# Every night at 04:00: SauceNAO backfill for images without a character tag.
-# Keep this separate from the tagging run because it is rate limited and slow.
-0 4 * * * $CAMIE tier0
+# Alternative: REPLACE the entry above with a sequential Tier 0 workflow.
+# This uploads eligible images to SauceNAO and uses the configured per-run quota.
+# Local tagging --limit does not cap subsequent Tier 0 searches.
+# 0 3 * * * /usr/bin/flock -n "$LOCK" "$CAMIE" run --mode recent --tier0 --immich-scan
 
-# Weekly on Sunday at 05:00: remove sidecars whose image no longer exists.
-0 5 * * 0 $CAMIE cleanup-orphans --confirm
-
-# Alternative: do everything in one nightly run.
-# 0 3 * * * $CAMIE run --mode recent --tier0 --immich-scan
+# Destructive cleanup is intentionally not scheduled. Review previews manually
+# and verify storage mounts before considering cleanup-orphans --confirm.
+# cleanup-tags can delete manual Immich tags globally, not just this library.

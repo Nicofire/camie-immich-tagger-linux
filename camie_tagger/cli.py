@@ -19,24 +19,33 @@ from .state import StateStore
 from .tier0 import DEFAULT_REPLACE_MIN_SIMILARITY, build_queue, run_tier0
 
 DESCRIPTION = """\
-Local anime/illustration auto-tagging for Immich.
-
-Tags images with camie-tagger-v2, writes hierarchical XMP sidecars, and asks Immich
-to pick them up. Configuration is read from .env; command line options win over it.
+Tag anime and illustration images locally for Immich.
+Write hierarchical XMP sidecars without changing the original images.
 """
 
-EPILOG = """\
-examples:
-  camie-tagger doctor
-  camie-tagger run --mode test --limit 5 --dry-run
-  camie-tagger run --mode all
-  camie-tagger run --mode recent --immich-scan
-  camie-tagger run --mode recent --tier0 --immich-scan
-  camie-tagger cleanup-tags --confirm
+EPILOG = (
+    "Quick start:\n"
+    "    camie-tagger doctor\n"
+    "    camie-tagger run --mode test --limit 5 --dry-run\n"
+    "    camie-tagger run --mode recent --immich-scan\n"
+    "    camie-tagger tier0 --limit 20\n"
+    "\n"
+    "More help:\n"
+    "    camie-tagger COMMAND --help\n"
+    "    camie-tagger run --help\n"
+    "\n"
+    "Options follow the command. Settings come from .env; command line options win.\n"
+    "\n"
+    "Passing secrets on the command line makes them visible to other users via `ps`.\n"
+    "Prefer .env (chmod 600) or environment variables on shared machines.\n"
+)
 
-Passing secrets on the command line makes them visible to other users via `ps`.
-Prefer .env (chmod 600) or environment variables on shared machines.
-"""
+
+class CommandHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    def _format_action(self, action: argparse.Action) -> str:
+        if isinstance(action, argparse._SubParsersAction):
+            return "".join(self._format_action(command) for command in action._get_subactions())
+        return super()._format_action(action)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,14 +81,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="camie-tagger",
+        usage="%(prog)s COMMAND [OPTIONS]",
         description=DESCRIPTION,
         epilog=EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=CommandHelpFormatter,
+        add_help=False,
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, title="Commands", metavar="COMMAND", prog=parser.prog,
+    )
+    parser.add_argument_group("Options").add_argument(
+        "-h", "--help", action="help", help="show this help message and exit",
+    )
 
     run = subparsers.add_parser(
-        "run", parents=[common], help="tag images and write sidecars"
+        "run", parents=[common], help="tag images locally and write XMP sidecars"
     )
     run.add_argument(
         "--mode",
@@ -114,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--confirm", action="store_true", help="confirm tag removals during reprocessing")
 
     tier0 = subparsers.add_parser(
-        "tier0", parents=[common], help="SauceNAO reverse search backfill"
+        "tier0", parents=[common], help="look up missing tags via SauceNAO (uploads images)"
     )
     tier0.add_argument("--limit", type=int, help="maximum number of searches this run")
     tier0.add_argument(
@@ -160,14 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stats", parents=[common], help="tag coverage statistics")
 
     orphans = subparsers.add_parser(
-        "cleanup-orphans", parents=[common], help="delete sidecars whose image is gone"
+        "cleanup-orphans", parents=[common], help="preview orphan sidecars; --confirm deletes them"
     )
     orphans.add_argument("--confirm", action="store_true", help="actually delete")
 
     old_tags = subparsers.add_parser(
         "cleanup-tags",
         parents=[common],
-        help="delete Immich tags outside this tool's namespaces",
+        help="preview Immich tags outside namespaces; --confirm deletes",
     )
     old_tags.add_argument("--confirm", action="store_true", help="actually delete")
 
@@ -270,7 +286,11 @@ def _cmd_tier0(settings: Settings, args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    if not arguments:
+        parser.print_help()
+        return 0
+    args = parser.parse_args(arguments)
 
     try:
         settings = _settings_from_args(args)

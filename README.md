@@ -230,7 +230,17 @@ environment variable. Keys are redacted from all log output.
 One command with subcommands:
 
 ```bash
-camie-tagger <command> [options]
+camie-tagger COMMAND [OPTIONS]
+```
+
+Run `camie-tagger` without arguments to show the command overview and quick-start
+examples. This is the same help as `--help`; it does not start processing or load
+your configuration. For all options of a specific command, use its own help:
+
+```bash
+camie-tagger
+camie-tagger --help
+camie-tagger run --help
 ```
 
 ### Check the installation

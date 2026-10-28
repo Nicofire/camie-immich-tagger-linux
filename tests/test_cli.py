@@ -6,6 +6,74 @@ from camie_tagger.pipeline import RunResult
 from camie_tagger.tier0 import Tier0Result
 
 
+COMMANDS = ("run", "tier0", "immich-scan", "stats", "cleanup-orphans", "cleanup-tags", "doctor")
+
+
+@pytest.mark.parametrize("arguments", [[], None])
+def test_no_arguments_show_help_without_loading_configuration(arguments, monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "argv", ["camie-tagger"])
+    monkeypatch.setattr(
+        cli, "_settings_from_args", lambda args: pytest.fail("Help must not load configuration")
+    )
+    assert cli.main(arguments) == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert "Commands:" in output.out
+    for command in COMMANDS:
+        assert command in output.out
+
+
+@pytest.mark.parametrize("flag", ["-h", "--help"])
+def test_root_help_has_compact_usage_and_command_list(flag, monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli, "_settings_from_args", lambda args: pytest.fail("Help must not load configuration")
+    )
+    with pytest.raises(SystemExit) as raised:
+        cli.main([flag])
+    assert raised.value.code == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert output.out.startswith("usage: camie-tagger COMMAND [OPTIONS]\n")
+    assert "Commands:\n" in output.out
+    assert "positional arguments:" not in output.out
+    assert "{run,tier0" not in output.out
+    assert "camie-tagger COMMAND --help" in output.out
+    examples = [line for line in output.out.splitlines() if line.lstrip().startswith("camie-tagger ")]
+    assert examples
+    assert all(line == "    " + line.lstrip() for line in examples)
+    for command in COMMANDS:
+        assert any(line.startswith(f"  {command} ") for line in output.out.splitlines())
+
+
+def test_default_output_matches_explicit_help(capsys):
+    assert cli.main([]) == 0
+    default_output = capsys.readouterr()
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--help"])
+    assert raised.value.code == 0
+    assert capsys.readouterr() == default_output
+
+
+@pytest.mark.parametrize("arguments", [["unknown-command"], ["--invalid-option"]])
+def test_invalid_arguments_still_report_usage_errors(arguments, capsys):
+    with pytest.raises(SystemExit) as raised:
+        cli.main(arguments)
+    assert raised.value.code == 2
+    assert "error:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", COMMANDS)
+def test_subcommand_help_remains_available(command, capsys):
+    with pytest.raises(SystemExit) as raised:
+        cli.main([command, "--help"])
+    assert raised.value.code == 0
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert output.out.startswith(f"usage: camie-tagger {command} ")
+    assert "--config PATH" in output.out
+    assert "--scan-dir PATH" in output.out
+
+
 def test_cli_category_thresholds_override_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("CAMIE_CATEGORY_THRESHOLDS", '{"character":0.7,"copyright":0.6}')
     monkeypatch.setattr(cli, "setup_logging", lambda **kwargs: None)

@@ -483,6 +483,11 @@ Unit tests use generated images, temporary state and fake inference sessions. Th
 block network requests and do not require ONNX Runtime, model weights, a GPU, API
 keys or a running Immich instance.
 
+They also cover simulated GPU/provider selection and CPU fallback, Immich API
+requests and failures, diagnostic checks and exit codes, and maintenance previews,
+selective cleanup and statistics. The existing CI unit jobs automatically include
+these tests on both Python versions.
+
 For real XMP roundtrips, install exiftool and run:
 
 ```bash
@@ -492,7 +497,7 @@ python -m pytest -q -m integration
 
 Integration tests skip when exiftool is absent. They check sidecar creation, merging,
 idempotency, selective removal, manual-tag preservation and unchanged original image
-bytes. GitHub Actions runs unit tests on Python 3.10 and 3.12, plus a Linux job with
+bytes. GitHub Actions runs unit tests on Python 3.10 to 3.14, plus a Linux job with
 real exiftool. Actual ONNX/OpenVINO inference and Immich import still need a smoke test
 on the target system with copies of a few images.
 

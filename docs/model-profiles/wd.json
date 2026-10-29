@@ -1,0 +1,5 @@
+{
+  "preset": "wd",
+  "model": "model.onnx",
+  "labels": "selected_tags.csv"
+}

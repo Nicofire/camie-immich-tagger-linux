@@ -55,13 +55,20 @@ def tagging(monkeypatch):
         prediction={"character": [("new", 0.9)]},
         calls=[],
         fail_on=set(),
+        model_dir=None,
+        model_profile=None,
     )
 
     class FakeTagger:
-        fingerprint = "test-model"
+        inference_profile = {
+            "model_fingerprint": "test-model",
+            "preprocessing_version": "test-preprocessing",
+            "model_profile": {"preset": "generic"},
+        }
 
-        def __init__(self, *args):
-            pass
+        def __init__(self, model_dir, selection, model_profile=None):
+            context.model_dir = model_dir
+            context.model_profile = model_profile
 
         def predict(self, image, threshold=0.5, category_thresholds=None):
             context.calls.append(image)
@@ -76,7 +83,7 @@ def tagging(monkeypatch):
         )
         return f"+{len(add)}-{len(remove)}"
 
-    monkeypatch.setattr(pipeline, "CamieTagger", FakeTagger)
+    monkeypatch.setattr(pipeline, "OnnxTagger", FakeTagger)
     monkeypatch.setattr(
         pipeline, "select_device", lambda *args: DeviceSelection(providers=["CPUExecutionProvider"])
     )

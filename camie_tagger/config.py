@@ -30,6 +30,7 @@ class ConfigError(RuntimeError):
 class Settings:
     scan_dirs: list[Path] = field(default_factory=list)
     model_dir: Path = PROJECT_ROOT / "models"
+    model_profile: Path | None = None
     exiftool: str = "exiftool"
     data_dir: Path = PROJECT_ROOT / "data"
     log_dir: Path = PROJECT_ROOT / "logs"
@@ -168,6 +169,7 @@ def load_settings(config_path: str | os.PathLike[str] | None = None, **overrides
 
     settings.scan_dirs = _as_path_list(_get("CAMIE_SCAN_DIRS"))
     settings.model_dir = _as_path(_get("CAMIE_MODEL_DIR")) or settings.model_dir
+    settings.model_profile = _as_path(_get("CAMIE_MODEL_PROFILE"))
     settings.exiftool = _get("CAMIE_EXIFTOOL") or settings.exiftool
     settings.data_dir = _as_path(_get("CAMIE_DATA_DIR")) or settings.data_dir
     settings.log_dir = _as_path(_get("CAMIE_LOG_DIR")) or settings.log_dir
@@ -216,7 +218,7 @@ def load_settings(config_path: str | os.PathLike[str] | None = None, **overrides
             raise ConfigError(f"Unknown setting override: {key}")
         if key == "immich_url" and isinstance(value, str):
             value = value.rstrip("/")
-        if key in {"model_dir", "data_dir", "log_dir", "log_file"} and value is not None:
+        if key in {"model_dir", "model_profile", "data_dir", "log_dir", "log_file"} and value is not None:
             value = Path(value).expanduser()
         if key == "category_thresholds":
             value = {**settings.category_thresholds, **validate_category_thresholds(value)}

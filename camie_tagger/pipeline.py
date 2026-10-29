@@ -10,7 +10,7 @@ from . import sidecar
 from .config import ConfigError, IMAGE_EXTENSIONS, Settings, validate_category_thresholds, validate_threshold
 from .devices import DeviceSelection, select_device
 from .logging_setup import get_logger
-from .model import PREPROCESSING_VERSION, CamieTagger
+from .model import OnnxTagger
 from .tags import build_taglist, has_camie_tags
 
 TEST_LIMIT = 20
@@ -99,10 +99,9 @@ def run_tagging(
 
     selection = select_device(settings.device, settings.fail_on_cpu_fallback)
     _log_selection(selection)
-    tagger = CamieTagger(settings.model_dir, selection)
+    tagger = OnnxTagger(settings.model_dir, selection, settings.model_profile)
     profile = {
-        "model_fingerprint": tagger.fingerprint,
-        "preprocessing_version": PREPROCESSING_VERSION,
+        **tagger.inference_profile,
         "thresholds": {"default": threshold, **category_thresholds},
     }
 

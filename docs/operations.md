@@ -118,8 +118,9 @@ Default paths are beneath the checkout; configuration can relocate them.
 
 Keep state together with sidecar backups. Deleting it loses automatic-tag
 provenance and does not force retagging of existing XMP. Use `--reprocess` instead.
-The stored inference profile records model/metadata fingerprints, preprocessing
-version and thresholds; a changed profile does not automatically schedule work.
+The stored inference profile records model/labels/declared-external-weight
+fingerprints, effective [model settings](models.md), preprocessing version and
+thresholds; a changed profile does not automatically schedule work.
 Limited runs and narrowed directories preserve unrelated records.
 
 Successful sidecar writes are read back for verification. Unreadable XMP is not

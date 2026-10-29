@@ -72,6 +72,22 @@ def test_subcommand_help_remains_available(command, capsys):
     assert output.out.startswith(f"usage: camie-tagger {command} ")
     assert "--config PATH" in output.out
     assert "--scan-dir PATH" in output.out
+    assert "--model-profile PATH" in output.out
+    assert "--model-dir PATH" in output.out
+
+
+@pytest.mark.parametrize("command", ["run", "doctor"])
+def test_cli_model_profile_overrides_environment(command, tmp_path, monkeypatch):
+    monkeypatch.setenv("CAMIE_MODEL_PROFILE", str(tmp_path / "environment.json"))
+    monkeypatch.setattr(cli, "setup_logging", lambda **kwargs: None)
+    profile = tmp_path / "selected.json"
+    directory = tmp_path / "selected-model"
+    args = cli.build_parser().parse_args(
+        [command, "--model-profile", str(profile), "--model-dir", str(directory)]
+    )
+    settings = cli._settings_from_args(args)
+    assert settings.model_profile == profile
+    assert settings.model_dir == directory
 
 
 def test_cli_category_thresholds_override_environment(tmp_path, monkeypatch):

@@ -1,0 +1,5 @@
+{
+  "preset": "camie",
+  "model": "camie-tagger-v2.onnx",
+  "labels": "camie-tagger-v2-metadata.json"
+}

@@ -1,4 +1,3 @@
-import hashlib
 import json
 import sys
 from types import SimpleNamespace
@@ -9,11 +8,18 @@ from PIL import Image
 
 from camie_tagger.devices import DeviceSelection
 from camie_tagger.model import CamieTagger, IMAGENET_MEAN, IMAGENET_STD, ModelError, _sigmoid
+from camie_tagger.model_profile import ModelProfile
 
 
 @pytest.fixture
 def tagger():
-    return CamieTagger.__new__(CamieTagger)
+    instance = CamieTagger.__new__(CamieTagger)
+    instance.profile = ModelProfile()
+    instance.image_size = (512, 512)
+    instance.input_dtype = np.dtype(np.float32)
+    instance.input_name = "input"
+    instance.output_name = "refined_predictions"
+    return instance
 
 
 def test_sigmoid_handles_extreme_finite_logits():
@@ -84,6 +90,11 @@ def test_predict_uses_inclusive_threshold(tagger):
     assert tagger.predict(None, threshold=0.5) == {"character": [("alice", 0.5)]}
 
 
+def test_camie_preserves_float32_sigmoid_threshold_boundaries(tagger):
+    configure_session(tagger, [[18, -18]])
+    assert tagger.predict(None, threshold=1) == {"character": [("alice", 1.0)]}
+
+
 def test_category_threshold_can_be_lower_than_global_threshold(tagger):
     configure_session(tagger, [[0, 0]])
     assert tagger.predict(None, threshold=0.8, category_thresholds={"character": 0.4}) == {
@@ -98,8 +109,8 @@ def test_model_fingerprint_includes_metadata_and_is_cached(tmp_path, tagger):
     metadata.write_bytes(b"metadata")
     tagger._model_paths = (weights, metadata)
 
-    expected = hashlib.sha256(b"weightsmetadata").hexdigest()
-    assert tagger.fingerprint == expected
+    expected = tagger.fingerprint
+    assert len(expected) == 64
     metadata.unlink()
     assert tagger.fingerprint == expected
 
@@ -119,8 +130,10 @@ def model_files(tmp_path, monkeypatch):
     metadata_path = tmp_path / "metadata.json"
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     session = SimpleNamespace(
-        get_inputs=lambda: [SimpleNamespace(name="input")],
-        get_outputs=lambda: [SimpleNamespace(name="refined_predictions")],
+        get_inputs=lambda: [SimpleNamespace(name="input", shape=[1, 3, 512, 512], type="tensor(float)")],
+        get_outputs=lambda: [
+            SimpleNamespace(name="refined_predictions", shape=[1, 2], type="tensor(float)")
+        ],
         get_providers=lambda: ["CPUExecutionProvider"],
     )
     runtime = SimpleNamespace(

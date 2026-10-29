@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "camie-immich-tagger"
 version = "1.0.0"
-description = "Local anime/illustration auto-tagging pipeline for Immich (Linux)"
+description = "Configurable local ONNX image tagging pipeline for Immich (Linux)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7.4", "pytest-cov>=4.1"]
+test-onnx = ["onnx>=1.14", "onnxruntime>=1.16"]
 
 # onnxruntime is intentionally NOT listed: install.sh picks the hardware-specific
 # variant (onnxruntime-openvino / onnxruntime-gpu / onnxruntime).
@@ -30,4 +31,7 @@ include = ["camie_tagger*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: requires a real exiftool installation"]
+markers = [
+    "integration: requires a real exiftool installation",
+    "onnx: runs generated models with real ONNX Runtime",
+]

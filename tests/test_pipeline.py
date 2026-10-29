@@ -19,6 +19,25 @@ def test_limited_all_run_preserves_prior_state(settings, state, tagging):
     assert reloaded.is_processed(image)
 
 
+def test_selected_model_profile_and_inference_settings_are_used(settings, state, tagging, tmp_path):
+    image = settings.scan_dirs[0] / "image.jpg"
+    image.touch()
+    settings.model_profile = tmp_path / "other-model.json"
+    settings.model_dir = tmp_path / "other-model"
+    settings.category_thresholds = {"character": 0.6}
+
+    run_tagging(settings, state, mode="all")
+
+    assert tagging.model_dir == settings.model_dir
+    assert tagging.model_profile == settings.model_profile
+    assert StateStore(settings.data_dir).processed[str(image)]["profile"] == {
+        "model_fingerprint": "test-model",
+        "preprocessing_version": "test-preprocessing",
+        "model_profile": {"preset": "generic"},
+        "thresholds": {"default": 0.5, "character": 0.6},
+    }
+
+
 def test_already_tagged_image_is_persisted(settings, state, tagging):
     image = settings.scan_dirs[0] / "image.jpg"
     image.touch()

@@ -4,18 +4,21 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
 ![Platform](https://img.shields.io/badge/Platform-Linux-22863A)
 
-**Local anime, manga illustration and fanart tagging for Immich external libraries.**
+**Local ONNX image tagging for Immich external libraries, with interchangeable models.**
 
-Run Camie on your own machine, write searchable tags to XMP sidecars, and let
+Run Camie, WD-Tagger or another compatible ONNX image tagger on your own machine,
+write searchable tags to XMP sidecars, and let
 [Immich](https://immich.app/) pick them up. Your original image files stay unchanged.
 Optional SauceNAO reverse search can help fill in missing character names.
 
-[Quick start](#quick-start) | [Commands](#commands) |
+[Quick start](#quick-start) | [Switch models](#switch-models) | [Commands](#commands) |
 [Automation](#automation) | [Documentation](#documentation)
 
 ## What it does
 
-- **Local inference:** use Camie v2 on CPU, Intel OpenVINO or NVIDIA CUDA.
+- **Local inference:** run ONNX image taggers on CPU, Intel OpenVINO or NVIDIA CUDA.
+- **Interchangeable models:** choose a JSON profile with preprocessing, labels and
+  output settings. Camie v2 remains the default; a WD preset is included.
 - **Organized tags:** `character/`, `copyright/`, `artist/`, `general/`, `rating/`.
 - **Sidecar workflow:** writes `image.jpg.xmp`, not the original image.
 - **Repeatable runs:** skips processed images and adds tags by default.
@@ -23,7 +26,7 @@ Optional SauceNAO reverse search can help fill in missing character names.
 - **One CLI:** diagnose, preview, tag, inspect statistics and trigger Immich scans.
 
 ```text
-Your images -> local Camie inference -> XMP sidecars -> searchable Immich tags
+Your images -> selected local ONNX model -> XMP sidecars -> searchable Immich tags
 ```
 
 > [!IMPORTANT]
@@ -52,9 +55,10 @@ cd /opt/camie-immich-tagger-linux
 bash install.sh
 ```
 
-The installer installs dependencies, downloads the model, creates the configuration
+The installer installs dependencies, downloads the default Camie model, creates the configuration
 and registers `camie-tagger` in `/usr/local/bin` without overwriting another command.
-The virtual environment does not need to be activated.
+The virtual environment does not need to be activated. To supply your own model,
+use `bash install.sh --skip-model` and [configure its profile](#switch-models).
 
 ### 2. Configure
 
@@ -95,6 +99,30 @@ Already tagged images are skipped unless you explicitly use `--reprocess`.
 > [!NOTE]
 > Immich's Sidecar job is server-wide. Metadata import can replace tags assigned
 > only in Immich, so test and back up first. See [import behavior](docs/operations.md#immich-import).
+
+## Switch models
+
+Keep each model and its matching labels in a separate directory. For a standard
+WD-Tagger export, put `model.onnx` and `selected_tags.csv` in `models/wd/`, then:
+
+```bash
+cp docs/model-profiles/wd.json models/wd/profile.json
+camie-tagger doctor --model-profile "$PWD/models/wd/profile.json"
+camie-tagger run --model-profile "$PWD/models/wd/profile.json" \
+  --mode test --limit 5 --dry-run
+```
+
+Set `CAMIE_MODEL_PROFILE` in `.env` to the **absolute path** of that profile to
+make it the default. Select a different profile with `--model-profile` whenever
+you want. Existing installations without this setting continue to use Camie.
+Previously tagged images still require `--mode all --reprocess`; switching
+models does not silently replace existing tags.
+
+The [model guide](docs/models.md) includes Camie, WD and generic templates,
+JSON/CSV/text label formats, normalization and output activation settings.
+ONNX alone does not specify these conventions: use the model author's settings.
+Supported models have one image input and a tag-score vector; embedding-only,
+detection, segmentation and multi-input models need additional adapters.
 
 ## Commands
 
@@ -149,6 +177,7 @@ Tier 0 scheduling, permissions, logs and cleanup precautions.
 | Guide | Contents |
 | --- | --- |
 | [Setup](docs/setup.md) | Configuration, GPU/LXC access, model files, permissions. |
+| [Models](docs/models.md) | Switch ONNX models, profiles, labels and compatibility. |
 | [Usage](docs/usage.md) | All CLI options, thresholds, reprocessing, Tier 0 safety. |
 | [Operations](docs/operations.md) | Cron, Immich behavior, state, updates, troubleshooting. |
 | [Development](docs/development.md) | Tests, CI, contribution checks and validation limits. |
@@ -160,3 +189,4 @@ The separately downloaded [Camie v2 model](https://huggingface.co/Camais03/camie
 by **Camais03** is licensed **GPL-3.0** and was trained on
 `p1atdev/danbooru-2024`. No model weights are bundled. Review the model's license
 before use or redistribution; the project and model have separate licensing terms.
+Other models and their label files have their own licenses; check their publishers' terms.

@@ -53,3 +53,24 @@ def test_cli_category_override_is_validated_after_merging(monkeypatch):
     assert load_settings(category_thresholds={"character": 0.6}).category_thresholds == {
         "character": 0.6, "copyright": 0.4
     }
+
+
+def test_model_profile_is_optional_for_existing_configurations():
+    assert load_settings().model_profile is None
+
+
+def test_model_path_precedence(tmp_path, monkeypatch):
+    env_file = tmp_path / "config.env"
+    file_profile = tmp_path / "from-file.json"
+    env_profile = tmp_path / "from-env.json"
+    cli_profile = tmp_path / "from-cli.json"
+    env_file.write_text(f"CAMIE_MODEL_PROFILE={file_profile}\n", encoding="utf-8")
+    assert load_settings(env_file).model_profile == file_profile
+    monkeypatch.setenv("CAMIE_MODEL_PROFILE", str(env_profile))
+    monkeypatch.setenv("CAMIE_MODEL_DIR", str(tmp_path / "from-env"))
+    assert load_settings(env_file).model_profile == env_profile
+    settings = load_settings(
+        env_file, model_profile=str(cli_profile), model_dir=str(tmp_path / "from-cli")
+    )
+    assert settings.model_profile == cli_profile
+    assert settings.model_dir == tmp_path / "from-cli"

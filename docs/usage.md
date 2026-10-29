@@ -18,6 +18,8 @@ equivalent: `python -m camie_tagger COMMAND [OPTIONS]` in the installed environm
 | Common option | Effect |
 | --- | --- |
 | `--config PATH` | Select a different `.env` file. |
+| `--model-profile PATH` | Select an ONNX model, labels and preprocessing via a JSON profile. |
+| `--model-dir PATH` | Override the default Camie directory; selected profile paths take precedence. |
 | `--scan-dir PATH` | Override image directories; repeat for several. |
 | `--device auto\|intel\|nvidia\|amd\|cpu` | Choose an inference device. |
 | `--fail-on-cpu-fallback` | Reject a CPU-only provider fallback. |
@@ -44,6 +46,10 @@ camie-tagger stats --scan-dir /mnt/media/series-a --scan-dir /mnt/media/series-b
 the roots `character/`, `copyright/`, `artist/`, `general/` and `rating/`.
 Unrelated sidecar tags are merged, not intentionally discarded. Original image
 bytes are not changed.
+
+Camie remains the default. Use `--model-profile PATH` or `CAMIE_MODEL_PROFILE`
+for WD or another compatible ONNX tagger; see the [model guide](models.md).
+Tag namespaces, thresholds and reprocessing safeguards apply to all profiles.
 
 | Run option | Effect |
 | --- | --- |
@@ -209,7 +215,7 @@ camie-tagger cleanup-orphans
 camie-tagger cleanup-tags
 ```
 
-`doctor` checks configuration, providers, model files, ExifTool, scan directories
+`doctor` checks configuration, providers, model files/profile/labels, ExifTool, scan directories
 and Immich connectivity/library IDs. It does not certify prediction accuracy or
 prove that a full inference and Immich import will succeed. `stats` reports XMP
 coverage and common character, copyright and artist tags, **not accuracy**.

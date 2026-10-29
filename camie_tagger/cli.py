@@ -19,7 +19,7 @@ from .state import StateStore
 from .tier0 import DEFAULT_REPLACE_MIN_SIMILARITY, build_queue, run_tier0
 
 DESCRIPTION = """\
-Tag anime and illustration images locally for Immich.
+Tag images locally for Immich with interchangeable ONNX models.
 Write hierarchical XMP sidecars without changing the original images.
 """
 
@@ -52,6 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     group = common.add_argument_group("global options")
     group.add_argument("--config", metavar="PATH", help="path to the .env file")
+    group.add_argument(
+        "--model-dir", metavar="PATH",
+        help="default Camie model directory; overrides CAMIE_MODEL_DIR",
+    )
+    group.add_argument(
+        "--model-profile", metavar="PATH",
+        help="ONNX model profile JSON; overrides CAMIE_MODEL_PROFILE",
+    )
     group.add_argument(
         "--scan-dir",
         action="append",
@@ -203,6 +211,8 @@ def _settings_from_args(args: argparse.Namespace) -> Settings:
     settings = load_settings(
         args.config,
         scan_dirs=scan_dirs,
+        model_dir=args.model_dir,
+        model_profile=args.model_profile,
         immich_url=args.immich_url,
         immich_api_key=args.immich_api_key,
         saucenao_api_key=args.saucenao_api_key,

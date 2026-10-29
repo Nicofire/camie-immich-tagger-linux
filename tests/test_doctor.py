@@ -1,3 +1,4 @@
+import json
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -8,6 +9,7 @@ from camie_tagger import doctor
 from camie_tagger.devices import DeviceError, DeviceSelection
 from camie_tagger.immich import ImmichError
 from camie_tagger.model import ModelError
+from camie_tagger.model_profile import ModelProfile
 from camie_tagger.sidecar import ExiftoolError
 
 
@@ -120,18 +122,50 @@ def test_missing_model_is_a_problem(settings, monkeypatch):
     finder = Mock(side_effect=ModelError("Model files missing"))
     monkeypatch.setattr(doctor, "find_model_files", finder)
     assert doctor._check_model(Mock(), settings) == 1
-    finder.assert_called_once_with(settings.model_dir)
+    finder.assert_called_once_with(settings.model_dir, ModelProfile())
 
 
 def test_model_file_details_are_reported_without_loading_weights(settings, tmp_path, monkeypatch):
     model = tmp_path / "model.onnx"
     metadata = tmp_path / "metadata.json"
     model.write_bytes(b"placeholder")
-    metadata.write_text("{}", encoding="utf-8")
+    metadata.write_text('["cat"]', encoding="utf-8")
     monkeypatch.setattr(doctor, "find_model_files", Mock(return_value=(model, metadata)))
     log = Mock()
     assert doctor._check_model(log, settings) == 0
-    log.info.assert_any_call("Metadata: %s", "metadata.json")
+    log.info.assert_any_call("Labels: %s (%d tags)", "metadata.json", 1)
+
+
+def test_doctor_checks_selected_profile_without_onnxruntime(settings, tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)
+    (tmp_path / "custom.onnx").write_bytes(b"placeholder")
+    (tmp_path / "selected_tags.csv").write_text("name,category\nalice,4\n", encoding="utf-8")
+    settings.model_profile = tmp_path / "profile.json"
+    settings.model_profile.write_text(json.dumps({
+        "preset": "wd", "model": "custom.onnx", "labels": "selected_tags.csv",
+    }), encoding="utf-8")
+    log = Mock()
+    assert doctor._check_model(log, settings) == 0
+    log.info.assert_any_call("Labels: %s (%d tags)", "selected_tags.csv", 1)
+    log.info.assert_any_call("Model profile: %s (%s)", settings.model_profile, "wd")
+
+
+@pytest.mark.parametrize("contents", ["[]", '{"unknown":true}', '{"preset":"wd"}'])
+def test_doctor_reports_invalid_profile(settings, tmp_path, contents):
+    settings.model_profile = tmp_path / "profile.json"
+    settings.model_profile.write_text(contents, encoding="utf-8")
+    log = Mock()
+    assert doctor._check_model(log, settings) == 1
+    log.error.assert_called_once()
+
+
+def test_doctor_reports_invalid_labels(settings, tmp_path):
+    settings.model_dir = tmp_path
+    (tmp_path / "model.onnx").write_bytes(b"placeholder")
+    (tmp_path / "metadata.json").write_text("{}", encoding="utf-8")
+    log = Mock()
+    assert doctor._check_model(log, settings) == 1
+    log.error.assert_called_once()
 
 
 @pytest.mark.parametrize("names, expected", [

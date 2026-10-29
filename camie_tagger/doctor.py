@@ -9,7 +9,7 @@ from . import devices, sidecar
 from .config import Settings
 from .immich import ImmichClient, ImmichError
 from .logging_setup import get_logger
-from .model import ModelError, find_model_files
+from .model import ModelError, find_model_files, load_labels, load_model_profile
 
 
 def run_doctor(settings: Settings) -> int:
@@ -78,12 +78,16 @@ def _check_exiftool(log, settings: Settings) -> int:
 
 def _check_model(log, settings: Settings) -> int:
     try:
-        onnx_path, meta_path = find_model_files(settings.model_dir)
-    except ModelError as exc:
+        profile = load_model_profile(settings.model_profile)
+        onnx_path, labels_path = find_model_files(settings.model_dir, profile)
+        labels, _ = load_labels(labels_path, profile)
+        model_size = onnx_path.stat().st_size
+    except (ModelError, OSError) as exc:
         log.error("%s", exc)
         return 1
-    log.info("Model: %s (%.0f MB)", onnx_path.name, onnx_path.stat().st_size / 1e6)
-    log.info("Metadata: %s", meta_path.name)
+    log.info("Model: %s (%.0f MB)", onnx_path.name, model_size / 1e6)
+    log.info("Labels: %s (%d tags)", labels_path.name, len(labels))
+    log.info("Model profile: %s (%s)", settings.model_profile or "built-in Camie", profile.preset)
     return 0
 
 

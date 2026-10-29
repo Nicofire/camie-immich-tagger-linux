@@ -19,7 +19,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -e ".[test]"
-      - run: python -m pytest -q -m "not integration" --cov=camie_tagger --cov-branch --cov-report=term-missing
+      - run: python -m pytest -q -m "not integration and not onnx" --cov=camie_tagger --cov-branch --cov-report=term-missing
+
+  onnx:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[test,test-onnx]"
+      - run: python -m pytest -q -m onnx
 
   exiftool:
     runs-on: ubuntu-24.04

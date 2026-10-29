@@ -4,7 +4,7 @@
 #
 #   sudo ./install.sh                 # detect hardware, install everything
 #   sudo ./install.sh --device intel  # force a specific accelerator
-#   sudo ./install.sh --skip-model    # do not download the model
+#   sudo ./install.sh --skip-model    # supply your own ONNX model and profile
 #
 set -euo pipefail
 
@@ -167,6 +167,7 @@ Installation finished.
 Next steps:
   1. Edit the configuration:   nano $PROJECT_DIR/.env
      Set CAMIE_SCAN_DIRS, IMMICH_URL, IMMICH_API_KEY and IMMICH_LIBRARY_IDS.
+     For another ONNX model, set CAMIE_MODEL_PROFILE (see docs/models.md).
      Look up the library UUID with:
        curl -H "x-api-key: YOUR_KEY" "YOUR_IMMICH_URL/api/libraries"
   2. Check the installation:   $VENV_DIR/bin/camie-tagger doctor

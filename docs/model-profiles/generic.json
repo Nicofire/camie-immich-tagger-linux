@@ -1,0 +1,13 @@
+{
+  "preset": "generic",
+  "model": "model.onnx",
+  "labels": "labels.txt",
+  "layout": "NCHW",
+  "color_order": "RGB",
+  "resize": "stretch",
+  "interpolation": "bilinear",
+  "scale": 255,
+  "mean": [0, 0, 0],
+  "std": [1, 1, 1],
+  "activation": "none"
+}

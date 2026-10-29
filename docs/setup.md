@@ -125,7 +125,8 @@ model, data and log directories are anchored to the checkout.
 | Setting | Default / purpose |
 | --- | --- |
 | `CAMIE_SCAN_DIRS` | Image directories, separated by colons. |
-| `CAMIE_MODEL_DIR` | `models/`; model and metadata directory. |
+| `CAMIE_MODEL_DIR` | `models/`; default Camie model and metadata directory. |
+| `CAMIE_MODEL_PROFILE` | Unset; optional JSON profile selecting another ONNX model, labels and inference settings. |
 | `CAMIE_EXIFTOOL` | `exiftool`; executable name or path. |
 | `CAMIE_DATA_DIR` | `data/`; persistent processing state. |
 | `CAMIE_LOG_DIR` | `logs/`; rotating log directory. |
@@ -194,9 +195,14 @@ Prefer `.env` or protected environment variables to CLI key arguments. Arguments
 can appear in process listings and shell history. Logs redact configured secrets,
 but do not publish configuration files or unreviewed debug output.
 
-## Manual model download
+## Model selection and manual download
 
-The installer downloads both files. For an offline/custom deployment, place them
+To supply a different ONNX tagger, install with `--skip-model` and select a
+`CAMIE_MODEL_PROFILE`. The [model guide](models.md) covers compatible models,
+Camie/WD/generic templates, file formats and safe switching. Profile paths can
+also be selected with `--model-profile PATH` on `run` and `doctor`.
+
+The installer downloads both default **Camie** files. For an offline Camie deployment, place them
 in `CAMIE_MODEL_DIR` or download from the checkout as follows:
 
 ```bash

@@ -1,3 +1,3 @@
-"""Local anime/illustration auto-tagging pipeline for Immich."""
+"""Configurable local ONNX image tagging for Immich."""
 
 __version__ = "1.0.0"
